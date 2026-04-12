@@ -15,7 +15,7 @@
  */
 
 #include <WiFi.h>
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 #include <ArduinoJson.h>
 
 // ---------------------------------------------------------
@@ -31,24 +31,59 @@ const char* password = "YOUR_WIFI_PASSWORD";
 #define RELAY_2 5
 #define RELAY_3 6
 
-AsyncWebServer server(80);
+WebServer server(80);
+StaticJsonDocument<200> jsonDoc;
+
+void handleRoot() {
+  server.send(200, "text/plain", "AGROCORE_NODE_ACTIVE");
+}
+
+void handleActuate() {
+  if (server.hasArg("plain") == false) {
+    server.send(400, "application/json", "{\"status\":\"body_missing\"}");
+    return;
+  }
+
+  String body = server.arg("plain");
+  DeserializationError error = deserializeJson(jsonDoc, body);
+  if (error) {
+    server.send(400, "application/json", "{\"status\":\"malformed_json\"}");
+    return;
+  }
+
+  int relay = jsonDoc["relay"];
+  int duration = jsonDoc["duration"];
+  
+  int gpio = 0;
+  if (relay == 1) gpio = RELAY_1;
+  else if (relay == 2) gpio = RELAY_2;
+  else if (relay == 3) gpio = RELAY_3;
+
+  if (gpio != 0) {
+    Serial.printf("Neural Command: Actuating Relay %d (GPIO %d) for %dms\n", relay, gpio, duration);
+    digitalWrite(gpio, LOW);  // Turn ON (Low Active)
+    delay(duration);          // Pulse
+    digitalWrite(gpio, HIGH); // Turn OFF
+    server.send(200, "application/json", "{\"status\":\"executed\"}");
+  } else {
+    server.send(400, "application/json", "{\"status\":\"invalid_relay\"}");
+  }
+}
 
 void setup() {
   Serial.begin(115200);
   
-  // Initialize Pins
   pinMode(RELAY_1, OUTPUT);
   pinMode(RELAY_2, OUTPUT);
   pinMode(RELAY_3, OUTPUT);
 
-  // All OFF at start (Low Active Relays)
+  // All OFF at start
   digitalWrite(RELAY_1, HIGH);
   digitalWrite(RELAY_2, HIGH);
   digitalWrite(RELAY_3, HIGH);
 
-  // WiFi Connection
-  Serial.print("AGROCORE: Initializing Neural Link...");
   WiFi.begin(ssid, password);
+  Serial.print("AGROCORE: Building Neural Link...");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
@@ -58,55 +93,17 @@ void setup() {
   Serial.print("IP Address: ");
   Serial.println(WiFi.localIP());
 
-  // API Endpoints
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-    request->send(200, "text/plain", "AGROCORE_NODE_ACTIVE");
-  });
-
-  // Neural Actuation endpoint
-  AsyncCallbackJsonWebHandler* handler = new AsyncCallbackJsonWebHandler("/actuate", [](AsyncWebServerRequest *request, JsonVariant &json) {
-    const JsonObject& jsonObj = json.as<JsonObject>();
-    
-    if (jsonObj.containsKey("relay") && jsonObj.containsKey("duration")) {
-      int relay = jsonObj["relay"];
-      int duration = jsonObj["duration"];
-      
-      int gpio = 0;
-      if (relay == 1) gpio = RELAY_1;
-      else if (relay == 2) gpio = RELAY_2;
-      else if (relay == 3) gpio = RELAY_3;
-
-      if (gpio != 0) {
-        Serial.printf("Neural Command: Actuating Relay %d (GPIO %d) for %dms\n", relay, gpio, duration);
-        
-        // Execute Pulse (Low Active)
-        digitalWrite(gpio, LOW);
-        
-        // Non-blocking timer using lambdas or simple delay in thread (Async server handles this)
-        // For simplicity in this v1.0, we use a blocking pulse as the AsyncServer handles the rest.
-        // In v2.0 we would use Ticker or separate tasks.
-        delay(duration); 
-        digitalWrite(gpio, HIGH);
-        
-        request->send(200, "application/json", "{\"status\":\"executed\"}");
-      } else {
-        request->send(400, "application/json", "{\"status\":\"invalid_relay\"}");
-      }
-    } else {
-      request->send(400, "application/json", "{\"status\":\"malformed_request\"}");
-    }
-  });
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/actuate", HTTP_POST, handleActuate);
   
-  server.addHandler(handler);
   server.begin();
-  
   Serial.println("AGROCORE NODE: Awaiting neural impulses...");
 }
 
 void loop() {
-  // Maintaining link integrity
+  server.handleClient();
+  
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Neural Link Severed. Reconnecting...");
     WiFi.disconnect();
     WiFi.begin(ssid, password);
     delay(5000);

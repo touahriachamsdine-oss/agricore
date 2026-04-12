@@ -8,7 +8,7 @@
  */
 
 #include <WiFi.h>
-#include <ESPAsyncWebServer.h>
+#include <WebServer.h>
 #include <ArduinoJson.h>
 
 // ---------------------------------------------------------
@@ -27,7 +27,7 @@ struct CropProfile {
   int doseDuration;
 };
 
-CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000}; // Your requested static profile
+CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000}; 
 
 // ---------------------------------------------------------
 // HARDWARE DEFINITIONS (GPIO 4, 5, 6)
@@ -36,13 +36,35 @@ CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000}; // Your requested 
 #define NUTRIENT_A_PUMP 5
 #define NUTRIENT_B_PUMP 6
 
-AsyncWebServer server(80);
+WebServer server(80);
+StaticJsonDocument<200> jsonDoc;
 
-void executePulse(int pin, int ms) {
-  Serial.printf("EXECUTING NEURAL PULSE: Pin %d for %dms\n", pin, ms);
-  digitalWrite(pin, LOW);  // Turn ON (Low Active)
-  delay(ms);
-  digitalWrite(pin, HIGH); // Turn OFF
+void handleActuate() {
+  if (server.hasArg("plain") == false) {
+    server.send(400, "application/json", "{\"status\":\"body_missing\"}");
+    return;
+  }
+
+  String body = server.arg("plain");
+  deserializeJson(jsonDoc, body);
+  
+  int relay = jsonDoc["relay"];
+  int duration = jsonDoc["duration"];
+  
+  int targetPin = 0;
+  if (relay == 1) targetPin = PH_DOWN_PUMP;
+  else if (relay == 2) targetPin = NUTRIENT_A_PUMP;
+  else if (relay == 3) targetPin = NUTRIENT_B_PUMP;
+
+  if (targetPin != 0) {
+    Serial.printf("EXECUTING NEURAL PULSE: Pin %d for %dms\n", targetPin, duration);
+    digitalWrite(targetPin, LOW); 
+    delay(duration);
+    digitalWrite(targetPin, HIGH);
+    server.send(200, "application/json", "{\"status\":\"pulse_complete\"}");
+  } else {
+    server.send(400, "application/json", "{\"status\":\"invalid_channel\"}");
+  }
 }
 
 void setup() {
@@ -65,41 +87,17 @@ void setup() {
   
   Serial.println("\nAGROCORE NODE ONLINE");
   Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
-  Serial.printf("Loaded Static Profile: %s (PH: %.1f, EC: %.1f)\n", 
-                activeProfile.name, activeProfile.targetPH, activeProfile.targetEC);
 
-  // Status Endpoint
-  server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
-    String response = "{\"node\":\"AGROCORE_01\",\"profile\":\"" + String(activeProfile.name) + "\"}";
-    request->send(200, "application/json", response);
+  server.on("/status", HTTP_GET, [](){
+    server.send(200, "application/json", "{\"node\":\"AGROCORE_01\"}");
   });
-
-  // Correction Actuation
-  AsyncCallbackJsonWebHandler* handler = new AsyncCallbackJsonWebHandler("/actuate", [](AsyncWebServerRequest *request, JsonVariant &json) {
-    const JsonObject& jsonObj = json.as<JsonObject>();
-    
-    int relay = jsonObj["relay"];
-    int duration = jsonObj["duration"];
-    
-    int targetPin = 0;
-    if (relay == 1) targetPin = PH_DOWN_PUMP;
-    else if (relay == 2) targetPin = NUTRIENT_A_PUMP;
-    else if (relay == 3) targetPin = NUTRIENT_B_PUMP;
-
-    if (targetPin != 0) {
-      executePulse(targetPin, duration);
-      request->send(200, "application/json", "{\"status\":\"pulse_complete\"}");
-    } else {
-      request->send(400, "application/json", "{\"status\":\"invalid_channel\"}");
-    }
-  });
+  server.on("/actuate", HTTP_POST, handleActuate);
   
-  server.addHandler(handler);
   server.begin();
 }
 
 void loop() {
-  // Reconnect logic
+  server.handleClient();
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.disconnect();
     WiFi.begin(ssid, password);
