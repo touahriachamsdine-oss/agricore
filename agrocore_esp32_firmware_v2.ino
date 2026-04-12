@@ -98,9 +98,16 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  if (WiFi.status() != WL_CONNECTED) {
-    WiFi.disconnect();
-    WiFi.begin(ssid, password);
-    delay(5000);
+  
+  static unsigned long lastCheck = 0;
+  if (millis() - lastCheck > 10000) { // Heartbeat print every 10s
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.printf("STATUS: [ONLINE] IP: %s | RSSI: %d dBm\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+    } else {
+      Serial.println("STATUS: [OFFLINE] Requesting Reconnect...");
+      WiFi.disconnect();
+      WiFi.begin(ssid, password);
+    }
+    lastCheck = millis();
   }
 }
