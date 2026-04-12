@@ -10,12 +10,21 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
+#include <PubSubClient.h> // PLEASE INSTALL THIS LIBRARY IN ARDUINO IDE
 
 // ---------------------------------------------------------
-// NETWORK IDENTITY (Update these)
+// NEURAL IDENTITY & NETWORK
 // ---------------------------------------------------------
 const char* ssid = "YOUR_WIFI_SSID";
 const char* password = "YOUR_WIFI_PASSWORD";
+const char* agroId = "AGRO_NODE_01"; // UNIQUE CHANNEL ID
+
+// ---------------------------------------------------------
+// CLOUD RELAY SETTINGS (HiveMQ)
+// ---------------------------------------------------------
+const char* mqttServer = "broker.hivemq.com";
+const int mqttPort = 1883;
+const String actuationTopic = "agrocore/actuate/" + String(agroId);
 
 // ---------------------------------------------------------
 // LOCAL CROP KNOWLEDGE (Hardware Fallback)
@@ -36,21 +45,12 @@ CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000};
 #define NUTRIENT_A_PUMP 5
 #define NUTRIENT_B_PUMP 6
 
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
 WebServer server(80);
-StaticJsonDocument<200> jsonDoc;
+StaticJsonDocument<256> jsonDoc;
 
-void handleActuate() {
-  if (server.hasArg("plain") == false) {
-    server.send(400, "application/json", "{\"status\":\"body_missing\"}");
-    return;
-  }
-
-  String body = server.arg("plain");
-  deserializeJson(jsonDoc, body);
-  
-  int relay = jsonDoc["relay"];
-  int duration = jsonDoc["duration"];
-  
+void executePulse(int relay, int duration) {
   int targetPin = 0;
   if (relay == 1) targetPin = PH_DOWN_PUMP;
   else if (relay == 2) targetPin = NUTRIENT_A_PUMP;
@@ -61,9 +61,19 @@ void handleActuate() {
     digitalWrite(targetPin, LOW); 
     delay(duration);
     digitalWrite(targetPin, HIGH);
-    server.send(200, "application/json", "{\"status\":\"pulse_complete\"}");
-  } else {
-    server.send(400, "application/json", "{\"status\":\"invalid_channel\"}");
+  }
+}
+
+// MQTT Message Receiver
+void onNeuralImpulse(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (int i = 0; i < length; i++) message += (char)payload[i];
+  
+  Serial.println("CLOUD-LINK IMPULSE: " + message);
+  
+  DeserializationError error = deserializeJson(jsonDoc, message);
+  if (!error) {
+    executePulse(jsonDoc["relay"], jsonDoc["duration"]);
   }
 }
 
@@ -84,27 +94,57 @@ void setup() {
     delay(500);
     Serial.print(".");
   }
-  
   Serial.println("\nAGROCORE NODE ONLINE");
-  Serial.printf("IP: %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("LOCAL IP: %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("CLOUD PAIRING ID: %s\n", agroId);
+
+  // Configure MQTT
+  mqttClient.setServer(mqttServer, mqttPort);
+  mqttClient.setCallback(onNeuralImpulse);
 
   server.on("/status", HTTP_GET, [](){
-    server.send(200, "application/json", "{\"node\":\"AGROCORE_01\"}");
+    server.send(200, "application/json", "{\"node\":\"" + String(agroId) + "\",\"mode\":\"HYBRID\"}");
   });
-  server.on("/actuate", HTTP_POST, handleActuate);
+  
+  // Also keep HTTP actuate for local dev stability
+  server.on("/actuate", HTTP_POST, [](){
+    if (server.hasArg("plain")) {
+        deserializeJson(jsonDoc, server.arg("plain"));
+        executePulse(jsonDoc["relay"], jsonDoc["duration"]);
+        server.send(200, "application/json", "{\"status\":\"ok\"}");
+    }
+  });
   
   server.begin();
+}
+
+void reconnectCloud() {
+  while (!mqttClient.connected()) {
+    Serial.print("AGROCORE: Negotiating Cloud Link...");
+    if (mqttClient.connect(agroId)) {
+      Serial.println("CONNECTED");
+      mqttClient.subscribe(actuationTopic.c_str());
+    } else {
+      Serial.printf("FAILED (rc=%d), retrying in 5s...\n", mqttClient.state());
+      delay(5000);
+    }
+  }
 }
 
 void loop() {
   server.handleClient();
   
+  if (!mqttClient.connected()) {
+    reconnectCloud();
+  }
+  mqttClient.loop();
+  
   static unsigned long lastCheck = 0;
-  if (millis() - lastCheck > 10000) { // Heartbeat print every 10s
+  if (millis() - lastCheck > 15000) { 
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("STATUS: [ONLINE] IP: %s | RSSI: %d dBm\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
+      Serial.printf("STATUS: [ONLINE] RSSI: %d dBm | CLOUD: %s\n", 
+                    WiFi.RSSI(), mqttClient.connected() ? "READY" : "ERR");
     } else {
-      Serial.println("STATUS: [OFFLINE] Requesting Reconnect...");
       WiFi.disconnect();
       WiFi.begin(ssid, password);
     }

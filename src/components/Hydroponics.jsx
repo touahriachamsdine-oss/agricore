@@ -33,8 +33,11 @@ const Hydroponics = () => {
     const [currentPH, setCurrentPH] = useState(7.0);
     const [currentEC, setCurrentEC] = useState(1.0);
 
-    const [isDosing, setIsDosing] = useState(false);
+    const [esp32Ip, setEsp32Ip] = useState(localStorage.getItem('agro_node_ip') || '192.168.1.185');
     const [isOnline, setIsOnline] = useState(false);
+    const [isCloudLinked, setIsCloudLinked] = useState(false);
+    const [nodeId, setNodeId] = useState(localStorage.getItem('agro_node_id') || 'AGRO_NODE_01');
+    const [isDosing, setIsDosing] = useState(false);
     const [isCheckingLine, setIsCheckingLine] = useState(false);
     const [pumpStatus, setPumpStatus] = useState({ 1: false, 2: false, 3: false });
     const [logs, setLogs] = useState([]);
@@ -42,17 +45,17 @@ const Hydroponics = () => {
 
     // Heartbeat Polling
     useEffect(() => {
-        const checkConnection = async () => {
-            setIsCheckingLine(true);
-            const status = await IoTProxy.checkLink(controllerIp);
+        IoTProxy.connect(nodeId, setIsCloudLinked);
+
+        const checkStatus = async () => {
+            const status = await IoTProxy.checkLink(esp32Ip);
             setIsOnline(status.online);
-            setIsCheckingLine(false);
         };
 
-        checkConnection();
-        const interval = setInterval(checkConnection, 10000); // Poll every 10s
+        checkStatus();
+        const interval = setInterval(checkStatus, 10000);
         return () => clearInterval(interval);
-    }, [controllerIp]);
+    }, [esp32Ip, nodeId]);
 
     useEffect(() => {
         localStorage.setItem('agrocore_hydro_profiles', JSON.stringify(profiles));
@@ -75,55 +78,31 @@ const Hydroponics = () => {
     };
 
     const runAIDosingCycle = async () => {
-        if (isDosing) return;
+        if (!selectedProfile || isDosing) return;
+
         setIsDosing(true);
-        addLog(`NEURAL ENGINE: Analyzing Manual Telemetry...`);
-        addLog(`Current: ${currentPH} PH / ${currentEC} EC | Target: ${selectedProfile.ph} PH / ${selectedProfile.ec} EC`);
-
+        addLog(`NEURAL ENGINE: Initializing Cloud Corrective Pulse...`);
         try {
-            // 1. PH BALANCE (Relay 1 / GPIO 4) 
-            // Calculate correction: If current PH > target PH, dose PH down.
+            const targetId = isCloudLinked ? nodeId : esp32Ip;
+            const method = isCloudLinked ? 'CLOUD' : 'DIRECT';
+
+            addLog(`ACTUATION MODE: ${method} [Target: ${targetId}]`);
+
+            // Sol A & B impulses
+            await IoTProxy.actuate(targetId, 2, 'ON', 500);
+            addLog(`ACTION: Nutrient A Pulse Transmitted.`);
+            await IoTProxy.actuate(targetId, 3, 'ON', 500);
+            addLog(`ACTION: Nutrient B Pulse Transmitted.`);
+
             if (currentPH > selectedProfile.ph) {
-                const phDelta = currentPH - selectedProfile.ph;
-                const phDose = Math.min(Math.round(phDelta * 1000 * 2), 5000); // Max 5s pulse per cycle
-
-                setActivePump(1);
-                setPumpStatus(prev => ({ ...prev, 1: true }));
-                addLog(`ACTION: High PH detected (+${phDelta.toFixed(1)}). Dosing PH Down for ${phDose}ms`);
-                await IoTProxy.actuate(controllerIp, 1, 'ON', phDose);
-                setPumpStatus(prev => ({ ...prev, 1: false }));
-                await new Promise(r => setTimeout(r, 1000));
-            } else {
-                addLog(`SKIP: PH is within optimal range (${currentPH}).`);
+                addLog(`ACTION: High PH detected. Dosing PH Down...`);
+                await IoTProxy.actuate(targetId, 1, 'ON', 1000);
             }
 
-            // 2. NUTRIENT BALANCE (Relay 2 & 3 / GPIO 5, 6)
-            // Calculate correction: If current EC < target EC, dose Nutrients.
-            if (currentEC < selectedProfile.ec) {
-                const ecDelta = selectedProfile.ec - currentEC;
-                const solADose = Math.min(Math.round(ecDelta * 1000 * 1.5), selectedProfile.doseA);
-                const solBDose = Math.min(Math.round(ecDelta * 1000 * 1.5), selectedProfile.doseB);
-
-                setActivePump(2);
-                setPumpStatus(prev => ({ ...prev, 2: true }));
-                addLog(`ACTION: Low Nutrient density identified. Dosing Sol A for ${solADose}ms`);
-                await IoTProxy.actuate(controllerIp, 2, 'ON', solADose);
-                setPumpStatus(prev => ({ ...prev, 2: false }));
-
-                await new Promise(r => setTimeout(r, 1000));
-
-                setActivePump(3);
-                setPumpStatus(prev => ({ ...prev, 3: true }));
-                addLog(`ACTION: Balancing mineralization. Dosing Sol B for ${solBDose}ms`);
-                await IoTProxy.actuate(controllerIp, 3, 'ON', solBDose);
-                setPumpStatus(prev => ({ ...prev, 3: false }));
-            } else {
-                addLog(`SKIP: Nutrient density (EC) is at profile target.`);
-            }
-
-            addLog(`NEURAL ENGINE: Correction cycle complete.`);
+            addLog(`NEURAL ENGINE: Pulse cycle complete.`);
         } catch (err) {
-            addLog(`ERROR: Actuator Link Severed.`);
+            addLog(`ERROR: Imperial Link Severed.`);
+            console.error("Link Severed during Pulse:", err);
         } finally {
             setIsDosing(false);
             setActivePump(null);
@@ -137,43 +116,30 @@ const Hydroponics = () => {
                     <h3 className="orbitron glow-text-primary" style={{ fontSize: '1.2rem', marginBottom: '8px' }}>HYDROPONIC NEURAL PROXY</h3>
                     <p className="text-dim" style={{ fontSize: '0.85rem' }}>AI-DRIVEN NUTRIENT & PH COMMAND CENTER</p>
                 </div>
-                <div className="glass-panel" style={{
-                    padding: '8px 16px',
+                <div style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '15px',
-                    background: isOnline ? 'rgba(153, 173, 122, 0.1)' : 'rgba(198, 40, 40, 0.05)',
-                    transition: 'all 0.5s ease'
+                    gap: '12px',
+                    padding: '8px 16px',
+                    borderRadius: '50px',
+                    background: isCloudLinked ? 'rgba(153, 173, 122, 0.1)' : 'rgba(198, 40, 40, 0.05)',
+                    border: `1px solid ${isCloudLinked ? 'var(--secondary)' : '#c62828'}`
                 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <div className={`status-dot ${isCheckingLine ? 'pulse' : ''}`} style={{
-                            background: isOnline ? '#4CAF50' : '#c62828',
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            boxShadow: isOnline ? '0 0 10px #4CAF50' : 'none'
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <div className={`status-dot ${isCloudLinked ? 'pulse' : ''}`} style={{
+                            background: isCloudLinked ? '#4CAF50' : '#c62828',
+                            width: '6px', height: '6px', borderRadius: '50%'
                         }}></div>
-                        <span style={{ fontSize: '0.7rem', fontWeight: 700, color: isOnline ? 'var(--primary)' : '#c62828' }}>
-                            {isOnline ? 'ESP32 ONLINE' : 'ESP32 OFFLINE'}
-                        </span>
+                        <span style={{ fontSize: '0.65rem', fontWeight: 700 }}>CLOUD</span>
                     </div>
-                    <input
-                        type="text"
-                        value={controllerIp}
-                        onChange={(e) => setControllerIp(e.target.value)}
-                        placeholder="ESP32 IP"
-                        style={{
-                            background: 'transparent',
-                            border: '1px solid var(--secondary)',
-                            borderRadius: '4px',
-                            color: 'var(--primary)',
-                            padding: '4px 8px',
-                            fontSize: '0.7rem',
-                            fontWeight: 700,
-                            width: '100px',
-                            textAlign: 'center'
-                        }}
-                    />
+                    <div style={{ width: '1px', height: '10px', background: 'var(--secondary)', opacity: 0.3 }}></div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <div style={{
+                            background: isOnline ? '#4CAF50' : '#888',
+                            width: '6px', height: '6px', borderRadius: '50%'
+                        }}></div>
+                        <span style={{ fontSize: '0.65rem', fontWeight: 700 }}>LOCAL</span>
+                    </div>
                 </div>
             </header>
 
