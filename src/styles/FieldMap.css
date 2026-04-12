@@ -1,0 +1,75 @@
+.map-wrapper {
+    height: 600px;
+    width: 100%;
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+    border: 1px solid var(--glass-border);
+}
+
+.map-container {
+    height: 100%;
+    width: 100%;
+    background: var(--bg-dark);
+}
+
+.map-controls {
+    position: absolute;
+    top: var(--spacing-md);
+    right: var(--spacing-md);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.map-legend {
+    position: absolute;
+    bottom: var(--spacing-md);
+    left: var(--spacing-md);
+    z-index: 1000;
+    padding: var(--spacing-sm) var(--spacing-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    font-size: 0.8rem;
+    color: var(--text-dim);
+}
+
+.marker-risk {
+    width: 12px;
+    height: 12px;
+    background: var(--secondary);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--spread-risk-glow);
+}
+
+.marker-isolated {
+    width: 12px;
+    height: 12px;
+    background: #ffcc00;
+    border-radius: 50%;
+}
+
+/* Customizing Leaflet elements for Dark Mode */
+.leaflet-container {
+    background: var(--bg-dark) !important;
+}
+
+.leaflet-tile-pane {
+    filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+    background: var(--surface) !important;
+    color: var(--text-main) !important;
+    backdrop-filter: var(--glass-blur);
+    border: 1px solid var(--glass-border);
+}

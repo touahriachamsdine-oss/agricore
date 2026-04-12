@@ -1,0 +1,67 @@
+.journal-timeline {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-lg);
+    margin-top: var(--spacing-lg);
+    position: relative;
+    padding-left: 20px;
+}
+
+.journal-timeline::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--accent);
+}
+
+.journal-entry {
+    position: relative;
+    padding: var(--spacing-md);
+}
+
+.journal-entry::after {
+    content: '';
+    position: absolute;
+    left: -24px;
+    top: 24px;
+    width: 10px;
+    height: 10px;
+    background: var(--primary);
+    border-radius: 50%;
+    box-shadow: 0 0 10px var(--primary-glow);
+}
+
+.journal-entry-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: var(--spacing-sm);
+}
+
+.entry-timestamp {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+}
+
+.entry-body {
+    display: flex;
+    gap: var(--spacing-md);
+}
+
+.entry-image {
+    width: 120px;
+    height: 120px;
+    border-radius: 8px;
+    background: var(--accent);
+    object-fit: cover;
+}
+
+.ai-reasoning-card {
+    margin-top: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border-left: 3px solid var(--primary);
+    font-size: 0.85rem;
+    background: rgba(0, 255, 136, 0.05);
+}
