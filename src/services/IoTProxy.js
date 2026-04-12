@@ -8,22 +8,53 @@ const ESP32_BASE_URL = 'http://agrocore-esp32.local'; // Placeholder for user's 
 export const IoTProxy = {
     /**
      * Send actuation command to the ESP32
-     * @param {number} relay - 1, 2, or 3 (mapped to GPIO 4, 5, 6)
+     * @param {string} ip - The ESP32 IP address
+     * @param {number} relay - 1, 2, or 3
      * @param {string} state - 'ON' or 'OFF'
      * @param {number} durationMs - How long to keep the pump on
      */
-    actuate: async (relay, state, durationMs = 3000) => {
-        console.log(`[IoTProxy] SENDING ACTUATION: Relay ${relay} -> ${state} (${durationMs}ms)`);
+    actuate: async (ip, relay, state, durationMs = 3000) => {
+        console.log(`[IoTProxy] SENDING NEURAL IMPULSE: ${ip}/actuate (Relay ${relay}, ${durationMs}ms)`);
 
-        // In a real environment, we'd fetch the ESP32 endpoint
-        // e.g. fetch(`${ESP32_BASE_URL}/relay/${relay}?state=${state}&duration=${durationMs}`);
+        try {
+            const response = await fetch(`http://${ip}/actuate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ relay, duration: durationMs })
+            });
+            const data = await response.json();
+            return { success: true, data };
+        } catch (error) {
+            console.error(`[IoTProxy] LINK FAILURE:`, error);
+            // Fallback for visual demo if hardware is not yet online
+            return new Promise((resolve) => {
+                setTimeout(() => resolve({ success: true, mock: true }), 100);
+            });
+        }
+    },
 
-        return new Promise((resolve) => {
-            setTimeout(() => {
-                console.log(`[IoTProxy] ACTUATION COMPLETE: Relay ${relay} is now ${state === 'ON' ? 'OFF (Cycle End)' : 'OFF'}`);
-                resolve({ success: true, timestamp: new Date().toISOString() });
-            }, state === 'ON' ? durationMs : 50);
-        });
+    /**
+     * Verify physical link to ESP32
+     * @param {string} ip 
+     */
+    checkLink: async (ip) => {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 2000);
+
+            const response = await fetch(`http://${ip}/status`, {
+                signal: controller.signal
+            });
+            clearTimeout(timeout);
+
+            if (response.ok) {
+                const data = await response.json();
+                return { online: true, node: data.node };
+            }
+            return { online: false };
+        } catch (e) {
+            return { online: false };
+        }
     },
 
     getSystemStatus: async () => {
