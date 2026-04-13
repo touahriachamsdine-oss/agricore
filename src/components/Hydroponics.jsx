@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     RiSettings3Line,
     RiFlaskLine,
@@ -6,328 +6,353 @@ import {
     RiHistoryLine,
     RiCpuLine,
     RiPlayCircleLine,
-    RiStopCircleLine
+    RiLeafLine,
+    RiFocus3Line,
+    RiSearchEyeLine,
+    RiCheckboxCircleLine,
+    RiCloseCircleLine
 } from 'react-icons/ri';
 import { useI18n } from '../context/i18nContext';
 import { IoTProxy } from '../services/IoTProxy';
 
-const DEFAULT_PROFILES = [
-    { id: 'lettuce', name: 'LETTUCE (Leafy)', ph: 6.0, ec: 1.2, doseA: 3000, doseB: 3000, color: '#99AD7A' },
-    { id: 'tomato', name: 'TOMATO (Fruit)', ph: 6.4, ec: 2.4, doseA: 5000, doseB: 5000, color: '#c62828' },
-];
+const MASTER_VAULT = {
+    "LEAFY GREENS": [
+        { id: 'let-ll', name: 'Lettuce (Loose Leaf)', ph: 6.0, ec: 1.0, icon: <RiLeafLine /> },
+        { id: 'let-rm', name: 'Lettuce (Romaine)', ph: 6.2, ec: 1.2, icon: <RiLeafLine /> },
+        { id: 'spin', name: 'Spinach', ph: 6.5, ec: 1.8, icon: <RiLeafLine /> },
+        { id: 'kale', name: 'Kale (Curly)', ph: 6.0, ec: 2.0, icon: <RiLeafLine /> },
+        { id: 'arug', name: 'Arugula', ph: 6.0, ec: 1.4, icon: <RiLeafLine /> },
+        { id: 'chard', name: 'Swiss Chard', ph: 6.2, ec: 1.8, icon: <RiLeafLine /> },
+        { id: 'bok', name: 'Bok Choy', ph: 6.5, ec: 2.0, icon: <RiLeafLine /> },
+    ],
+    "HERBS": [
+        { id: 'bas-it', name: 'Basil (Italian)', ph: 6.0, ec: 1.6, icon: <RiLeafLine /> },
+        { id: 'bas-th', name: 'Basil (Thai)', ph: 6.2, ec: 1.8, icon: <RiLeafLine /> },
+        { id: 'mint', name: 'Mint (Peppermint)', ph: 6.5, ec: 2.2, icon: <RiLeafLine /> },
+        { id: 'cil', name: 'Cilantro', ph: 6.0, ec: 1.4, icon: <RiLeafLine /> },
+        { id: 'pars', name: 'Parsley', ph: 6.0, ec: 1.8, icon: <RiLeafLine /> },
+        { id: 'chive', name: 'Chives', ph: 6.2, ec: 1.8, icon: <RiLeafLine /> },
+        { id: 'dill', name: 'Dill', ph: 5.8, ec: 1.2, icon: <RiLeafLine /> },
+    ],
+    "FRUITING": [
+        { id: 'tom-ch', name: 'Tomato (Cherry)', ph: 6.2, ec: 2.5, icon: <RiFocus3Line /> },
+        { id: 'tom-bf', name: 'Tomato (Beefsteak)', ph: 6.4, ec: 3.0, icon: <RiFocus3Line /> },
+        { id: 'pep-bl', name: 'Pepper (Bell)', ph: 6.0, ec: 2.2, icon: <RiFocus3Line /> },
+        { id: 'pep-ha', name: 'Pepper (Habanero)', ph: 6.2, ec: 2.4, icon: <RiFocus3Line /> },
+        { id: 'cuc', name: 'Cucumber', ph: 5.8, ec: 2.0, icon: <RiFocus3Line /> },
+        { id: 'strw', name: 'Strawberry', ph: 6.0, ec: 1.8, icon: <RiFocus3Line /> },
+    ],
+    "COLE CROPS": [
+        { id: 'broc', name: 'Broccoli', ph: 6.5, ec: 2.8, icon: <RiFocus3Line /> },
+        { id: 'cabb', name: 'Cabbage', ph: 6.8, ec: 2.5, icon: <RiFocus3Line /> },
+    ]
+};
 
 const Hydroponics = () => {
     const { t } = useI18n();
-    const [controllerIp, setControllerIp] = useState('192.168.1.100');
 
-    // Profiles Management
-    const [profiles, setProfiles] = useState(() => {
-        const saved = localStorage.getItem('agrocore_hydro_profiles');
-        return saved ? JSON.parse(saved) : DEFAULT_PROFILES;
-    });
+    // VARIETAL STATE
+    const [searchTerm, setSearchTerm] = useState('');
+    const [selectedVariety, setSelectedVariety] = useState(MASTER_VAULT["LEAFY GREENS"][0]);
+    const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-    const [selectedProfile, setSelectedProfile] = useState(profiles[0]);
-    const [showAddForm, setShowAddForm] = useState(false);
-    const [newProfile, setNewProfile] = useState({ name: '', ph: 6.0, ec: 1.5, doseA: 3000, doseB: 3000 });
-
-    // Manual Sensors
+    // TELEMETRY
     const [currentPH, setCurrentPH] = useState(7.0);
     const [currentEC, setCurrentEC] = useState(1.0);
 
-    const [esp32Ip, setEsp32Ip] = useState(localStorage.getItem('agro_node_ip') || '192.168.1.185');
-    const [isOnline, setIsOnline] = useState(false);
-    const [isCloudLinked, setIsCloudLinked] = useState(false);
-    const [nodeId, setNodeId] = useState(localStorage.getItem('agro_node_id') || 'AGRO_NODE_01');
+    // ACTUATION
+    const [missionPlan, setMissionPlan] = useState(null);
     const [isDosing, setIsDosing] = useState(false);
-    const [pumpStatus, setPumpStatus] = useState({ 1: false, 2: false, 3: false });
     const [logs, setLogs] = useState([]);
-    const [activePump, setActivePump] = useState(null);
+    const [activeRelay, setActiveRelay] = useState(null);
 
-    // Heartbeat Polling
+    // NETWORK
+    const [nodeId, setNodeId] = useState(localStorage.getItem('agro_node_id') || 'AGRO_NODE_01');
+    const [esp32Ip, setEsp32Ip] = useState(localStorage.getItem('agro_node_ip') || '192.168.1.185');
+    const [isCloudLinked, setIsCloudLinked] = useState(false);
+    const [isOnline, setIsOnline] = useState(false);
+
     useEffect(() => {
         IoTProxy.connect(nodeId, setIsCloudLinked);
+        const check = async () => { setIsOnline((await IoTProxy.checkLink(esp32Ip)).online); };
+        check();
+        const tid = setInterval(check, 10000);
+        return () => clearInterval(tid);
+    }, [nodeId, esp32Ip]);
 
-        const checkStatus = async () => {
-            const status = await IoTProxy.checkLink(esp32Ip);
-            setIsOnline(status.online);
-        };
+    const filteredVault = useMemo(() => {
+        const result = {};
+        Object.entries(MASTER_VAULT).forEach(([category, items]) => {
+            const matches = items.filter(i => i.name.toLowerCase().includes(searchTerm.toLowerCase()));
+            if (matches.length > 0) result[category] = matches;
+        });
+        return result;
+    }, [searchTerm]);
 
-        checkStatus();
-        const interval = setInterval(checkStatus, 10000);
-        return () => clearInterval(interval);
-    }, [esp32Ip, nodeId]);
+    const addLog = (msg) => setLogs(p => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...p.slice(0, 4)]);
 
-    useEffect(() => {
-        localStorage.setItem('agrocore_hydro_profiles', JSON.stringify(profiles));
-    }, [profiles]);
+    const planMission = () => {
+        const plan = [];
+        // PH Pulse: 1500ms per 0.1 PH delta (Reasonable timing)
+        if (currentPH > selectedVariety.ph) {
+            const delta = currentPH - selectedVariety.ph;
+            const duration = Math.round(delta * 10 * 1500);
+            plan.push({ relay: 1, name: 'PH DOWN', duration, icon: <RiFlaskLine />, reason: `PH high (+${delta.toFixed(2)})` });
+        }
 
-    const addProfile = () => {
-        if (!newProfile.name) return;
-        const p = { ...newProfile, id: Date.now().toString(), color: '#546B41' };
-        setProfiles([...profiles, p]);
-        setShowAddForm(false);
+        // EC Pulse: 2000ms per 0.1 EC delta
+        if (currentEC < selectedVariety.ec) {
+            const delta = selectedVariety.ec - currentEC;
+            const duration = Math.round(delta * 10 * 2000);
+            plan.push({ relay: 2, name: 'NUTRIENT A', duration, icon: <RiPulseLine />, reason: `EC deficit (-${delta.toFixed(2)})` });
+            plan.push({ relay: 3, name: 'NUTRIENT B', duration, icon: <RiPulseLine />, reason: `EC deficit (-${delta.toFixed(2)})` });
+        }
+
+        if (plan.length === 0) {
+            addLog("ANALYSIS: System state within botanical limits.");
+        } else {
+            setMissionPlan(plan);
+        }
     };
 
-    const removeProfile = (id) => {
-        setProfiles(profiles.filter(p => p.id !== id));
-        if (selectedProfile.id === id) setSelectedProfile(profiles[0]);
-    };
-
-    const addLog = (msg) => {
-        setLogs(prev => [`${msg}`, ...prev.slice(0, 4)]);
-    };
-
-    const runAIDosingCycle = async () => {
-        if (!selectedProfile || isDosing) return;
-
+    const runMission = async () => {
+        if (isDosing || !missionPlan) return;
         setIsDosing(true);
-        addLog(`NEURAL ENGINE: Initializing Cloud Corrective Pulse...`);
+        const targetId = isCloudLinked ? nodeId : esp32Ip;
+
         try {
-            const targetId = isCloudLinked ? nodeId : esp32Ip;
-            const method = isCloudLinked ? 'CLOUD' : 'DIRECT';
-
-            addLog(`ACTUATION MODE: ${method} [Target: ${targetId}]`);
-
-            // Sol A & B impulses
-            await IoTProxy.actuate(targetId, 2, 'ON', 500);
-            addLog(`ACTION: Nutrient A Pulse Transmitted.`);
-            await IoTProxy.actuate(targetId, 3, 'ON', 500);
-            addLog(`ACTION: Nutrient B Pulse Transmitted.`);
-
-            if (currentPH > selectedProfile.ph) {
-                addLog(`ACTION: High PH detected. Dosing PH Down...`);
-                await IoTProxy.actuate(targetId, 1, 'ON', 1000);
+            for (const step of missionPlan) {
+                addLog(`EXECUTING: ${step.name} for ${step.duration}ms`);
+                setActiveRelay(step.relay);
+                await IoTProxy.actuate(targetId, step.relay, 'ON', step.duration);
+                await new Promise(r => setTimeout(r, step.duration + 1000));
+                setActiveRelay(null);
             }
-
-            addLog(`NEURAL ENGINE: Pulse cycle complete.`);
+            addLog("MISSION COMPLETE: Neural state normalized.");
+            setMissionPlan(null);
         } catch (err) {
-            addLog(`ERROR: Imperial Link Severed.`);
-            console.error("Link Severed during Pulse:", err);
+            addLog("ERROR: Actuation failure.");
         } finally {
             setIsDosing(false);
         }
     };
 
     return (
-        <div className="hydro-module animate-fade">
-            <header style={{ marginBottom: 'var(--spacing-xl)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div className="oracle-dashboard animate-fade">
+            <style>{`
+                .oracle-dashboard { color: var(--primary); padding-bottom: 50px; }
+                .glass-card { background: rgba(255,255,255,0.02); backdrop-filter: blur(15px); border: 1px solid rgba(255,255,255,0.05); border-radius: 24px; padding: 2rem; box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+                
+                .oracle-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3rem; }
+                .node-badge { display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.2); padding: 8px 20px; border-radius: 100px; border: 1px solid rgba(153, 173, 122, 0.2); font-size: 0.7rem; font-weight: 800; font-family: 'Orbitron'; }
+                .status-pin { width: 8px; height: 8px; border-radius: 50%; }
+                
+                .main-oracle-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 2rem; }
+                
+                .variety-selector { cursor: pointer; position: relative; }
+                .selector-display { display: flex; align-items: center; gap: 15px; padding: 1.5rem; background: rgba(153, 173, 122, 0.1); border-radius: 18px; border: 1px solid var(--secondary); transition: all 0.3s; }
+                .selector-display:hover { background: rgba(153, 173, 122, 0.2); transform: scale(1.02); }
+                .variety-icon { font-size: 2rem; color: var(--secondary); }
+                
+                .vault-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 1000; margin-top: 10px; max-height: 400px; overflow-y: auto; background: #fffdf9; border-radius: 18px; border: 1px solid #ddd; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+                .vault-search { padding: 1rem; border-bottom: 1px solid #eee; position: sticky; top: 0; background: white; }
+                .vault-search input { width: 100%; border: none; font-family: 'Orbitron'; font-size: 0.8rem; outline: none; color: black; }
+                .vault-cat { font-size: 0.6rem; font-weight: 900; opacity: 0.4; padding: 1rem 1rem 0.5rem; letter-spacing: 2px; color: black; }
+                .vault-item { padding: 0.8rem 1rem; display: flex; align-items: center; gap: 10px; cursor: pointer; transition: 0.2s; font-size: 0.85rem; font-weight: 600; color: black; }
+                .vault-item:hover { background: var(--secondary); color: white; }
+
+                .stat-ring { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem; }
+                .ring-box { text-align: center; padding: 1rem; border-radius: 14px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.05); }
+                .ring-val { font-family: 'Orbitron'; font-size: 1.2rem; font-weight: 900; color: var(--secondary); }
+                .ring-lab { font-size: 0.55rem; font-weight: 900; opacity: 0.5; margin-top: 5px; }
+
+                .telemetry-input { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 2rem; }
+                .input-block label { display: block; font-size: 0.6rem; font-weight: 900; margin-bottom: 8px; opacity: 0.6; }
+                .input-block input { width: 100%; background: white; border: 2px solid var(--accent); padding: 1rem; border-radius: 12px; font-family: 'Orbitron'; font-size: 1.1rem; color: var(--primary); }
+
+                .mission-btn { width: 100%; margin-top: 2rem; padding: 1.2rem; border-radius: 14px; border: none; background: var(--primary); color: white; font-family: 'Orbitron'; font-size: 0.9rem; letter-spacing: 1px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: 0.3s; }
+                .mission-btn:hover { background: var(--secondary); box-shadow: 0 10px 25px rgba(153, 173, 122, 0.3); }
+
+                .mission-plan-overlay { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; padding: 2rem; backdrop-filter: blur(5px); }
+                .plan-card { width: 100%; max-width: 450px; background: white; border-radius: 24px; padding: 2rem; }
+                .plan-header { margin-bottom: 1.5rem; border-bottom: 1px solid #eee; padding-bottom: 1rem; }
+                .plan-step { display: flex; align-items: center; gap: 15px; padding: 12px; border-radius: 12px; background: #f9f9f9; margin-bottom: 10px; border: 1px solid #eee; }
+                .step-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--secondary); color: white; display: flex; align-items: center; justify-content: center; }
+                .step-info { flex: 1; }
+                .step-title { font-weight: 800; font-size: 0.8rem; color: black; }
+                .step-dur { font-size: 0.7rem; color: #888; font-weight: 700; }
+
+                .relay-mon { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 2rem; }
+                .relay-card { padding: 1rem; border-radius: 18px; border: 1px solid rgba(0,0,0,0.05); background: rgba(0,0,0,0.02); text-align: center; }
+                .relay-card.active { border-color: var(--secondary); background: rgba(153, 173, 122, 0.15); animation: pulse-border 1s infinite alternate; }
+                
+                @keyframes pulse-border { from { border-color: transparent; } to { border-color: var(--secondary); } }
+                .spin { animation: rotate 2s linear infinite; }
+                @keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+            `}</style>
+
+            <header className="oracle-header">
                 <div>
-                    <h3 className="orbitron glow-text-primary" style={{ fontSize: '1.2rem', marginBottom: '8px' }}>HYDROPONIC NEURAL PROXY</h3>
-                    <p className="text-dim" style={{ fontSize: '0.85rem' }}>AI-DRIVEN NUTRIENT & PH COMMAND CENTER</p>
+                    <h2 className="orbitron glow-text-primary">BOTANICAL ORACLE</h2>
+                    <p className="text-dim">AGROCORE NEURAL FABRIC v4.0</p>
                 </div>
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                    padding: '8px 16px',
-                    borderRadius: '50px',
-                    background: isCloudLinked ? 'rgba(153, 173, 122, 0.1)' : 'rgba(198, 40, 40, 0.05)',
-                    border: `1px solid ${isCloudLinked ? 'var(--secondary)' : '#c62828'}`
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <div className={`status-dot ${isCloudLinked ? 'pulse' : ''}`} style={{
-                            background: isCloudLinked ? '#4CAF50' : '#c62828',
-                            width: '6px', height: '6px', borderRadius: '50%'
-                        }}></div>
-                        <span style={{ fontSize: '0.65rem', fontWeight: 700 }}>CLOUD</span>
+                <div className="node-info" style={{ display: 'flex', gap: '15px' }}>
+                    <div className="node-badge">
+                        <div className="status-pin" style={{ background: isCloudLinked ? '#4CAF50' : '#c62828' }} />
+                        CLOUD: {isCloudLinked ? 'STABLE' : 'STALLED'}
                     </div>
-                    <div style={{ width: '1px', height: '10px', background: 'var(--secondary)', opacity: 0.3 }}></div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <div style={{
-                            background: isOnline ? '#4CAF50' : '#888',
-                            width: '6px', height: '6px', borderRadius: '50%'
-                        }}></div>
-                        <span style={{ fontSize: '0.65rem', fontWeight: 700 }}>LOCAL</span>
+                    <div className="node-badge">
+                        <div className="status-pin" style={{ background: isOnline ? '#4CAF50' : '#888' }} />
+                        LOCAL: {isOnline ? 'STABLE' : 'STALLED'}
                     </div>
                 </div>
             </header>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 'var(--spacing-lg)' }}>
-                {/* CONFIGURATION SIDEBAR */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-lg)' }}>
-                    <div className="glass-panel" style={{ padding: 'var(--spacing-lg)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                                <RiSettings3Line className="text-dim" />
-                                <h4 className="orbitron" style={{ fontSize: '0.8rem' }}>CROP PROFILES</h4>
-                            </div>
-                            <button
-                                onClick={() => setShowAddForm(!showAddForm)}
-                                style={{ background: 'none', border: 'none', color: 'var(--secondary)', cursor: 'pointer', fontSize: '1.2rem' }}
-                            >
-                                {showAddForm ? '×' : '+'}
-                            </button>
-                        </div>
-
-                        {showAddForm && (
-                            <div style={{ marginBottom: '20px', padding: '12px', background: 'rgba(84, 107, 65, 0.05)', borderRadius: '8px' }}>
-                                <input
-                                    placeholder="Name"
-                                    value={newProfile.name}
-                                    onChange={e => setNewProfile({ ...newProfile, name: e.target.value })}
-                                    style={{ width: '100%', marginBottom: '8px', background: 'white', border: '1px solid #ddd', padding: '4px' }}
-                                />
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                                    <input type="number" placeholder="PH" onChange={e => setNewProfile({ ...newProfile, ph: parseFloat(e.target.value) })} />
-                                    <input type="number" placeholder="EC" onChange={e => setNewProfile({ ...newProfile, ec: parseFloat(e.target.value) })} />
+            <main className="main-oracle-grid">
+                {/* LEFT: ORACLE CONFIG */}
+                <div className="oracle-controls">
+                    <div className="glass-card">
+                        <div className="variety-selector">
+                            <label className="ring-lab" style={{ display: 'block', marginBottom: '10px' }}>ACTIVE SPECIES</label>
+                            <div className="selector-display" onClick={() => setIsSearchOpen(!isSearchOpen)}>
+                                <span className="variety-icon">{selectedVariety.icon}</span>
+                                <div style={{ flex: 1 }}>
+                                    <div className="orbitron" style={{ fontWeight: 900 }}>{selectedVariety.name}</div>
+                                    <div style={{ fontSize: '0.65rem', opacity: 0.6 }}>SPECIES ID: {selectedVariety.id}</div>
                                 </div>
-                                <button onClick={addProfile} className="btn-primary" style={{ width: '100%', marginTop: '8px', padding: '8px' }}>SAVE</button>
+                                <RiSearchEyeLine size={20} />
                             </div>
-                        )}
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '300px', overflowY: 'auto' }}>
-                            {profiles.map(profile => (
-                                <div key={profile.id} style={{ position: 'relative' }}>
-                                    <button
-                                        onClick={() => setSelectedProfile(profile)}
-                                        style={{
-                                            width: '100%',
-                                            padding: '16px',
-                                            borderRadius: '12px',
-                                            border: 'none',
-                                            background: selectedProfile.id === profile.id ? 'var(--primary)' : 'rgba(84, 107, 65, 0.05)',
-                                            color: selectedProfile.id === profile.id ? '#FFF8EC' : 'var(--primary)',
-                                            textAlign: 'left',
-                                            cursor: 'pointer',
-                                            transition: 'all 0.3s ease'
-                                        }}
-                                    >
-                                        <div style={{ fontWeight: 800, fontSize: '0.9rem' }}>{profile.name}</div>
-                                        <div style={{ fontSize: '0.7rem', opacity: 0.8, marginTop: '4px' }}>Target: {profile.ph} PH • {profile.ec} EC</div>
-                                    </button>
-                                    {profiles.length > 1 && (
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); removeProfile(profile.id); }}
-                                            style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: '#c62828', cursor: 'pointer', opacity: 0.5 }}
-                                        >
-                                            DEL
-                                        </button>
-                                    )}
+                            {isSearchOpen && (
+                                <div className="vault-dropdown animate-fade-down">
+                                    <div className="vault-search">
+                                        <input
+                                            autoFocus
+                                            placeholder="SEARCH BOTANICAL VAULT..."
+                                            value={searchTerm}
+                                            onChange={e => setSearchTerm(e.target.value)}
+                                        />
+                                    </div>
+                                    {Object.entries(filteredVault).map(([cat, items]) => (
+                                        <div key={cat}>
+                                            <div className="vault-cat">{cat}</div>
+                                            {items.map(item => (
+                                                <div
+                                                    className="vault-item"
+                                                    key={item.id}
+                                                    onClick={() => {
+                                                        setSelectedVariety(item);
+                                                        setIsSearchOpen(false);
+                                                        setSearchTerm('');
+                                                    }}
+                                                >
+                                                    {item.icon} {item.name}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ))}
                                 </div>
-                            ))}
+                            )}
                         </div>
 
-                        <div style={{ marginTop: '20px', borderTop: '1px solid rgba(0,0,0,0.05)', paddingTop: '20px' }}>
-                            <div className="config-row" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                <label style={{ fontSize: '0.6rem', fontWeight: 800, opacity: 0.6 }}>NODE ID (CLOUD)</label>
-                                <input value={nodeId} onChange={e => setNodeId(e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
-                                <label style={{ fontSize: '0.6rem', fontWeight: 800, opacity: 0.6, marginTop: '10px' }}>LOCAL IP (FALLBACK)</label>
-                                <input value={esp32Ip} onChange={e => setEsp32Ip(e.target.value)} style={{ width: '100%', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+                        <div className="stat-ring">
+                            <div className="ring-box">
+                                <div className="ring-val">{selectedVariety.ph}</div>
+                                <div className="ring-lab">TARGET PH</div>
+                            </div>
+                            <div className="ring-box">
+                                <div className="ring-val">{selectedVariety.ec}</div>
+                                <div className="ring-lab">TARGET EC</div>
                             </div>
                         </div>
-                    </div>
 
-                    {/* MANUAL SENSORS PANEL */}
-                    <div className="glass-panel" style={{ padding: 'var(--spacing-lg)', background: 'rgba(211, 204, 172, 0.1)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-                            <RiCpuLine className="text-dim" />
-                            <h4 className="orbitron" style={{ fontSize: '0.8rem' }}>MANUAL READINGS</h4>
-                        </div>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                            <div>
-                                <label style={{ fontSize: '0.6rem', fontWeight: 900, color: 'var(--text-dim)' }}>CURRENT PH</label>
-                                <input
-                                    type="number"
-                                    step="0.1"
-                                    value={currentPH}
-                                    onChange={e => setCurrentPH(parseFloat(e.target.value))}
-                                    style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid var(--accent)', background: 'white' }}
-                                />
+                        <div className="telemetry-input">
+                            <div className="input-block">
+                                <label>MEASURED PH</label>
+                                <input type="number" step="0.1" value={currentPH} onChange={e => setCurrentPH(parseFloat(e.target.value))} />
                             </div>
-                            <div>
-                                <label style={{ fontSize: '0.6rem', fontWeight: 900, color: 'var(--text-dim)' }}>CURRENT EC</label>
-                                <input
-                                    type="number"
-                                    step="0.1"
-                                    value={currentEC}
-                                    onChange={e => setCurrentEC(parseFloat(e.target.value))}
-                                    style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid var(--accent)', background: 'white' }}
-                                />
+                            <div className="input-block">
+                                <label>MEASURED EC</label>
+                                <input type="number" step="0.1" value={currentEC} onChange={e => setCurrentEC(parseFloat(e.target.value))} />
                             </div>
                         </div>
-                        <button
-                            className="btn-primary"
-                            style={{ width: '100%', marginTop: '24px', padding: '20px', justifyContent: 'center' }}
-                            disabled={isDosing}
-                            onClick={runAIDosingCycle}
-                        >
-                            {isDosing ? <RiPulseLine className="spin" /> : <RiPlayCircleLine />}
-                            <span>{isDosing ? 'NEURAL AGENT ACTIVE' : 'REQUEST AI CALIBRATION'}</span>
+
+                        <button className="mission-btn" onClick={planMission}>
+                            <RiPulseLine className={isDosing ? 'spin' : ''} />
+                            <span>PLAN NEURAL MISSION</span>
                         </button>
                     </div>
                 </div>
 
-                {/* ACTUATOR MONITOR */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-lg)' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--spacing-lg)' }}>
-                        <div className={`glass-panel stat-card ${activePump === 1 ? 'dosing-active' : ''}`} style={{ borderLeft: pumpStatus[1] ? '4px solid #c62828' : 'none' }}>
-                            <RiFlaskLine style={{ color: '#c62828', marginBottom: '12px' }} />
-                            <div className="text-dim" style={{ fontSize: '0.7rem' }}>RELAY 1 (GPIO 4)</div>
-                            <div style={{ fontWeight: 800, color: 'var(--primary)' }}>PH DOWN</div>
-                            <div style={{ fontSize: '1.4rem', fontWeight: 900, marginTop: '8px', color: pumpStatus[1] ? '#c62828' : 'var(--text-dim)' }}>
-                                {pumpStatus[1] ? 'FLOWING' : 'READY'}
-                            </div>
-                        </div>
-                        <div className={`glass-panel stat-card ${activePump === 2 ? 'dosing-active' : ''}`} style={{ borderLeft: pumpStatus[2] ? '4px solid var(--secondary)' : 'none' }}>
-                            <RiFlaskLine style={{ color: 'var(--secondary)', marginBottom: '12px' }} />
-                            <div className="text-dim" style={{ fontSize: '0.7rem' }}>RELAY 2 (GPIO 5)</div>
-                            <div style={{ fontWeight: 800, color: 'var(--primary)' }}>SOL A (NPK)</div>
-                            <div style={{ fontSize: '1.4rem', fontWeight: 900, marginTop: '8px', color: pumpStatus[2] ? 'var(--secondary)' : 'var(--text-dim)' }}>
-                                {pumpStatus[2] ? 'FLOWING' : 'READY'}
-                            </div>
-                        </div>
-                        <div className={`glass-panel stat-card ${activePump === 3 ? 'dosing-active' : ''}`} style={{ borderLeft: pumpStatus[3] ? '4px solid #546B41' : 'none' }}>
-                            <RiFlaskLine style={{ color: '#546B41', marginBottom: '12px' }} />
-                            <div className="text-dim" style={{ fontSize: '0.7rem' }}>RELAY 3 (GPIO 6)</div>
-                            <div style={{ fontWeight: 800, color: 'var(--primary)' }}>SOL B (NPK)</div>
-                            <div style={{ fontSize: '1.4rem', fontWeight: 900, marginTop: '8px', color: pumpStatus[3] ? '#546B41' : 'var(--text-dim)' }}>
-                                {pumpStatus[3] ? 'FLOWING' : 'READY'}
-                            </div>
-                        </div>
-                    </div>
+                {/* RIGHT: MONITOR & LOGS */}
+                <div className="oracle-monitor">
+                    <div className="glass-card" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                        <h4 className="orbitron" style={{ fontSize: '0.8rem', opacity: 0.4, marginBottom: '2rem' }}>ACTUATION MONITOR</h4>
 
-                    {/* NEURAL COMMAND LOG */}
-                    <div className="glass-panel" style={{ flex: 1, padding: 'var(--spacing-lg)', background: 'linear-gradient(135deg, rgba(84, 107, 65, 0.02), transparent)' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-                            <RiHistoryLine className="text-dim" />
-                            <h4 className="orbitron" style={{ fontSize: '0.8rem' }}>AI DECISION STREAM</h4>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            {logs.map((log, i) => (
-                                <div key={i} style={{
-                                    padding: '12px 16px',
-                                    background: 'rgba(84, 107, 65, 0.04)',
-                                    borderRadius: '8px',
-                                    fontSize: '0.75rem',
-                                    fontFamily: 'monospace',
-                                    color: 'var(--primary)',
-                                    borderLeft: '3px solid var(--secondary)'
-                                }}>
-                                    {log}
+                        <div className="relay-mon">
+                            {[
+                                { r: 1, n: 'PH DOWN', p: 'GPIO 4' },
+                                { r: 2, n: 'SOL A', p: 'GPIO 5' },
+                                { r: 3, n: 'SOL B', p: 'GPIO 6' }
+                            ].map(relay => (
+                                <div key={relay.r} className={`relay-card ${activeRelay === relay.r ? 'active' : ''}`}>
+                                    <RiFlaskLine size={24} style={{ opacity: 0.3 }} />
+                                    <div style={{ fontWeight: 900, fontSize: '0.7rem', marginTop: '10px' }}>{relay.n}</div>
+                                    <div style={{ fontSize: '0.5rem', opacity: 0.4 }}>{relay.p}</div>
                                 </div>
                             ))}
-                            {logs.length === 0 && <div className="text-dim" style={{ fontSize: '0.8rem', fontStyle: 'italic' }}>Awaiting neural command input...</div>}
+                        </div>
+
+                        <div className="logs-panel" style={{ flex: 1, marginTop: '2rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1rem' }}>
+                                <RiHistoryLine className="icon-purple" />
+                                <span className="orbitron" style={{ fontSize: '0.6rem', fontWeight: 900 }}>MISSION LOG</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                {logs.map((l, i) => (
+                                    <div key={i} style={{ fontSize: '0.7rem', fontFamily: 'monospace', padding: '10px', background: 'rgba(0,0,0,0.02)', borderRadius: '8px', borderLeft: '3px solid var(--secondary)' }}>{l}</div>
+                                ))}
+                                {logs.length === 0 && <div className="text-dim" style={{ fontStyle: 'italic', fontSize: '0.7rem' }}>Awaiting neural analysis...</div>}
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
+            </main>
 
-            <style>{`
-                .dosing-active {
-                    animation: pulse-bg 1s infinite alternate;
-                }
-                @keyframes pulse-bg {
-                    from { background: rgba(153, 173, 122, 0.1); }
-                    to { background: rgba(153, 173, 122, 0.25); }
-                }
-                .spin {
-                    animation: rotate 2s linear infinite;
-                }
-                @keyframes rotate {
-                    from { transform: rotate(0deg); }
-                    to { transform: rotate(360deg); }
-                }
-            `}</style>
+            {/* MISSION PLAN POPUP */}
+            {missionPlan && (
+                <div className="mission-plan-overlay animate-fade">
+                    <div className="plan-card animate-scale-up">
+                        <header className="plan-header">
+                            <h3 className="orbitron" style={{ color: 'black' }}>MISSION PREVIEW</h3>
+                            <p style={{ fontSize: '0.7rem', fontWeight: 700, color: '#888' }}>REASONING IDENTIFIED {missionPlan.length} ACTUATION STEPS</p>
+                        </header>
+
+                        <div className="plan-steps">
+                            {missionPlan.map((step, i) => (
+                                <div key={i} className="plan-step">
+                                    <div className="step-icon">
+                                        {step.icon}
+                                    </div>
+                                    <div className="step-info">
+                                        <div className="step-title">{step.name}</div>
+                                        <div className="step-dur" style={{ color: '#555' }}>{step.reason} • {(step.duration / 1000).toFixed(2)}s PULSE</div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <footer style={{ marginTop: '2rem', display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px' }}>
+                            <button className="btn-primary" style={{ background: '#eee', color: '#000' }} onClick={() => setMissionPlan(null)}>
+                                <RiCloseCircleLine /> CANCEL
+                            </button>
+                            <button className="btn-primary" style={{ background: 'var(--secondary)' }} onClick={runMission}>
+                                <RiCheckboxCircleLine /> CONFIRM & ACTUATE
+                            </button>
+                        </footer>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
