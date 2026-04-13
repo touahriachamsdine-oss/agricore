@@ -6,7 +6,7 @@ import {
     RiInformationLine,
     RiHistoryLine,
     RiCameraLensLine,
-    RiScannerLine,
+    RiScanLine,
     RiScan2Line,
     RiLeafLine,
     RiShieldCrossLine
