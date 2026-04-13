@@ -40,24 +40,7 @@ export const PlatformProvider = ({ children }) => {
         { id: 1, type: 'follow-up', message: 'Follow-up needed: Tomato #14 (Powdery Mildew check)', date: '3d ago' }
     ]);
 
-    const [journalEntries, setJournalEntries] = useState([
-        {
-            id: 1,
-            plantId: 1, // Tomato
-            date: '2026-04-10 14:30',
-            observation: 'Detected yellowing on lower leaves (interveinal chlorosis).',
-            aiNote: 'Likely Magnesium (Mg) deficiency due to low soil pH inhibiting uptake.',
-            image: 'https://images.unsplash.com/photo-1592419044706-39796d40f98c?auto=format&fit=crop&w=200&q=80'
-        },
-        {
-            id: 2,
-            plantId: 1, // Tomato follow-up
-            date: '2026-04-13 09:15',
-            observation: 'Yellowing spread to second leaf tier. Necrotic spots appearing.',
-            aiNote: 'Progression alert: Deficiency not corrected. Spread rate: 1 node/3 days. Immediate pH adjustment required.',
-            image: 'https://images.unsplash.com/photo-1599940824399-b87987cb5733?auto=format&fit=crop&w=200&q=80'
-        }
-    ]);
+    const [journalEntries, setJournalEntries] = useState([]);
 
     const [pins, setPins] = useState([]);
     const [location, setLocation] = useState(null);
