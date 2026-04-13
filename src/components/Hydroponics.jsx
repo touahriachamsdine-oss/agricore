@@ -154,7 +154,7 @@ const Hydroponics = () => {
                 addLog("AUTO-PILOT: Deficit detected. Executing corrective pulses...");
                 runMission(plan);
             }
-        }, 30000); // Check every 30s
+        }, 15000); // Check more frequently for automation
 
         return () => clearInterval(checkid);
     }, [autoPilot, isDosing, telemetry, selectedVariety, emergencyStatus, runMission]);
@@ -273,80 +273,76 @@ const Hydroponics = () => {
                     <div className="sahara-glass" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
                         <div className="telemetry-orb">
                             <div className="orb-active" />
-                            <div style={{ textAlign: 'center', z- index: 10 }}>
-                            <div className="stat-value" style={{ fontSize: '3.5rem', color: telemetry.ph > selectedVariety.ph + 0.2 ? '#ef4444' : 'var(--oasis-teal)' }}>{telemetry.ph.toFixed(2)}</div>
-                            <div className="stat-label">LIVE FEEDBACK PH</div>
+                            <div style={{ textAlign: 'center', zIndex: 10 }}>
+                                <div className="stat-value" style={{ fontSize: '3.5rem', color: telemetry.ph > selectedVariety.ph + 0.2 ? '#ef4444' : 'var(--oasis-teal)' }}>{telemetry.ph.toFixed(2)}</div>
+                                <div className="stat-label">LIVE FEEDBACK PH</div>
+                            </div>
                         </div>
-                    </div>
 
-                    <div className="stat-grid" style={{ marginTop: '0' }}>
-                        <div className="stat-card">
-                            <div className="stat-label">LIVE EC</div>
-                            <div className="stat-value" style={{ fontSize: '1.5rem', color: 'var(--oasis-teal)' }}>{telemetry.ec.toFixed(2)}</div>
+                        <div className="stat-grid" style={{ marginTop: '0' }}>
+                            <div className="stat-card">
+                                <div className="stat-label">LIVE EC</div>
+                                <div className="stat-value" style={{ fontSize: '1.5rem', color: 'var(--oasis-teal)' }}>{telemetry.ec.toFixed(2)}</div>
+                            </div>
+                            <div className="stat-card">
+                                <div className="stat-label">UPLINK STRENGTH</div>
+                                <div className="stat-value" style={{ fontSize: '1.5rem' }}>{telemetry.rssi} dBm</div>
+                            </div>
                         </div>
-                        <div className="stat-card">
-                            <div className="stat-label">UPLINK STRENGTH</div>
-                            <div className="stat-value" style={{ fontSize: '1.5rem' }}>{telemetry.rssi} dBm</div>
-                        </div>
-                    </div>
 
-                    <div className="mission-logs" style={{ flex: 1, marginTop: '2.5rem' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem', opacity: 0.5 }}>
-                            <RiHistoryLine />
-                            <span className="orbitron" style={{ fontSize: '0.65rem' }}>NEURAL STATE LOG</span>
-                        </div>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                            {logs.map((l, i) => (
-                                <div key={i} style={{ fontSize: '0.7rem', padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', borderLeft: '3px solid var(--sahara-dusk)' }}>{l}</div>
-                            ))}
-                            {logs.length === 0 && <div style={{ fontSize: '0.7rem', opacity: 0.3, fontStyle: 'italic' }}>Awaiting uplink sync...</div>}
+                        <div className="mission-logs" style={{ flex: 1, marginTop: '2.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem', opacity: 0.5 }}>
+                                <RiHistoryLine />
+                                <span className="orbitron" style={{ fontSize: '0.65rem' }}>NEURAL STATE LOG</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                                {logs.map((l, i) => (
+                                    <div key={i} style={{ fontSize: '0.7rem', padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', borderLeft: '3px solid var(--sahara-dusk)' }}>{l}</div>
+                                ))}
+                                {logs.length === 0 && <div style={{ fontSize: '0.7rem', opacity: 0.3, fontStyle: 'italic' }}>Awaiting uplink sync...</div>}
+                            </div>
                         </div>
                     </div>
                 </div>
-        </div>
-            </main >
+            </main>
 
-    {/* E-STOP BUTTON */ }
-    < div className = "estop-btn" onClick = { runEStop } title = "EMERGENCY STOP" >
-        <RiAlertLine />
-            </div >
-
-    {/* MISSION PLAN POPUP */ }
-{
-    missionPlan && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justify- content: 'center', zIndex: 2000, padding: '2rem'
-}}>
-    <div className="sahara-glass" style={{ maxWidth: '500px', width: '100%', background: '#111' }}>
-        <h3 className="orbitron" style={{ marginBottom: '1.5rem', borderBottom: '1px solid #333', paddingBottom: '1rem' }}>MISSION PREVIEW</h3>
-        {missionPlan.map((step, i) => (
-            <div key={i} style={{ display: 'flex', gap: '15px', padding: '15px', background: '#222', borderRadius: '15px', marginBottom: '10px' }}>
-                <div style={{ color: 'var(--sahara-sand)' }}>{step.icon}</div>
-                <div>
-                    <div style={{ fontWeight: 800, fontSize: '0.8rem' }}>{step.name}</div>
-                    <div style={{ fontSize: '0.65rem', opacity: 0.5 }}>{step.reason} • {(step.duration / 1000).toFixed(2)}s</div>
-                </div>
+            {/* E-STOP BUTTON */}
+            <div className="estop-btn" onClick={runEStop} title="EMERGENCY STOP">
+                <RiAlertLine />
             </div>
-        ))}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '15px', marginTop: '2rem' }}>
-            <button className="auto-pilot-toggle" style={{ background: '#333' }} onClick={() => setMissionPlan(null)}>CANCEL</button>
-            <button className="auto-pilot-toggle" style={{ background: 'var(--sahara-dusk)' }} onClick={() => runMission()}>CONFIRM MISSION</button>
-        </div>
-    </div>
-                </div >
+
+            {/* MISSION PLAN POPUP */}
+            {missionPlan && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 2000, padding: '2rem' }}>
+                    <div className="sahara-glass" style={{ maxWidth: '500px', width: '100%', background: '#111' }}>
+                        <h3 className="orbitron" style={{ marginBottom: '1.5rem', borderBottom: '1px solid #333', paddingBottom: '1rem' }}>MISSION PREVIEW</h3>
+                        {missionPlan.map((step, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '15px', padding: '15px', background: '#222', borderRadius: '15px', marginBottom: '10px' }}>
+                                <div style={{ color: 'var(--sahara-sand)' }}>{step.icon}</div>
+                                <div>
+                                    <div style={{ fontWeight: 800, fontSize: '0.8rem' }}>{step.name}</div>
+                                    <div style={{ fontSize: '0.65rem', opacity: 0.5 }}>{step.reason} • {(step.duration / 1000).toFixed(2)}s</div>
+                                </div>
+                            </div>
+                        ))}
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '15px', marginTop: '2rem' }}>
+                            <button className="auto-pilot-toggle" style={{ background: '#333' }} onClick={() => setMissionPlan(null)}>CANCEL</button>
+                            <button className="auto-pilot-toggle" style={{ background: 'var(--sahara-dusk)' }} onClick={() => runMission()}>CONFIRM MISSION</button>
+                        </div>
+                    </div>
+                </div>
             )}
 
-{
-    !autoPilot && !missionPlan && (
-        <button
-            className="auto-pilot-toggle"
-            style={{ position: 'fixed', bottom: '130px', right: '40px', width: 'auto', padding: '1rem 2rem', zIndex: 100 }}
-            onClick={() => planMission()}
-        >
-            <RiPlayCircleLine /> MANUAL MISSION
-        </button>
-    )
-}
-        </div >
+            {!autoPilot && !missionPlan && (
+                <button
+                    className="auto-pilot-toggle"
+                    style={{ position: 'fixed', bottom: '130px', right: '40px', width: 'auto', padding: '1rem 2rem', zIndex: 100 }}
+                    onClick={() => planMission()}
+                >
+                    <RiPlayCircleLine /> MANUAL MISSION
+                </button>
+            )}
+        </div>
     );
 };
 
