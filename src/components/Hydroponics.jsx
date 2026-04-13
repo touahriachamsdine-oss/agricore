@@ -93,17 +93,17 @@ const Hydroponics = () => {
 
     const planMission = () => {
         const plan = [];
-        // PH Pulse: 1500ms per 0.1 PH delta (Reasonable timing)
+        // PH Pulse: 375ms per 0.1 PH delta (1/4 scale of 1500)
         if (currentPH > selectedVariety.ph) {
             const delta = currentPH - selectedVariety.ph;
-            const duration = Math.round(delta * 10 * 1500);
+            const duration = Math.round(delta * 10 * 375);
             plan.push({ relay: 1, name: 'PH DOWN', duration, icon: <RiFlaskLine />, reason: `PH high (+${delta.toFixed(2)})` });
         }
 
-        // EC Pulse: 2000ms per 0.1 EC delta
+        // EC Pulse: 500ms per 0.1 EC delta (1/4 scale of 2000)
         if (currentEC < selectedVariety.ec) {
             const delta = selectedVariety.ec - currentEC;
-            const duration = Math.round(delta * 10 * 2000);
+            const duration = Math.round(delta * 10 * 500);
             plan.push({ relay: 2, name: 'NUTRIENT A', duration, icon: <RiPulseLine />, reason: `EC deficit (-${delta.toFixed(2)})` });
             plan.push({ relay: 3, name: 'NUTRIENT B', duration, icon: <RiPulseLine />, reason: `EC deficit (-${delta.toFixed(2)})` });
         }
@@ -122,6 +122,7 @@ const Hydroponics = () => {
 
         try {
             for (const step of missionPlan) {
+                if (step.duration <= 0) continue;
                 addLog(`EXECUTING: ${step.name} for ${step.duration}ms`);
                 setActiveRelay(step.relay);
                 await IoTProxy.actuate(targetId, step.relay, 'ON', step.duration);
@@ -134,6 +135,24 @@ const Hydroponics = () => {
             addLog("ERROR: Actuation failure.");
         } finally {
             setIsDosing(false);
+        }
+    };
+
+    const runQuickTest = async () => {
+        if (isDosing) return;
+        setIsDosing(true);
+        addLog("LINK TEST: Firing sequence [SOL A] for 500ms...");
+        try {
+            const targetId = isCloudLinked ? nodeId : esp32Ip;
+            setActiveRelay(2);
+            await IoTProxy.actuate(targetId, 2, 'ON', 500);
+            await new Promise(r => setTimeout(r, 1500));
+            addLog("TEST COMPLETE: Hardware responsive.");
+        } catch (err) {
+            addLog("TEST FAILED: Link stalling.");
+        } finally {
+            setIsDosing(false);
+            setActiveRelay(null);
         }
     };
 
@@ -277,10 +296,15 @@ const Hydroponics = () => {
                             </div>
                         </div>
 
-                        <button className="mission-btn" onClick={planMission}>
-                            <RiPulseLine className={isDosing ? 'spin' : ''} />
-                            <span>PLAN NEURAL MISSION</span>
-                        </button>
+                        <div className="mission-actions" style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: '10px' }}>
+                            <button className="mission-btn" onClick={planMission}>
+                                <RiPulseLine className={isDosing ? 'spin' : ''} />
+                                <span>PLAN NEURAL MISSION</span>
+                            </button>
+                            <button className="mission-btn test-btn" onClick={runQuickTest} disabled={isDosing} style={{ marginTop: '2rem', height: 'auto', background: 'rgba(0,0,0,0.05)', color: 'var(--primary)', border: '1px solid #ddd' }}>
+                                <RiCheckboxCircleLine />
+                            </button>
+                        </div>
                     </div>
                 </div>
 
