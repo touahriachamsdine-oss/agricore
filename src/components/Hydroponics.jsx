@@ -1,16 +1,15 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     RiFlaskLine,
     RiPulseLine,
     RiCpuLine,
     RiPlayCircleLine,
-    RiLeafLine,
     RiFocus3Line,
     RiAlertLine,
-    RiRadarLine,
     RiTimerFlashLine
 } from 'react-icons/ri';
 import { useI18n } from '../context/i18nContext';
+import { usePlatform } from '../context/PlatformContext';
 import { IoTProxy } from '../services/IoTProxy';
 
 const MASTER_VAULT = {
@@ -18,69 +17,52 @@ const MASTER_VAULT = {
         { id: 'alg-tom-tym', name: 'Tomato (Tymador)', ph: 6.2, ec: 2.8, icon: <RiFocus3Line /> },
         { id: 'alg-pep-lam', name: 'Pepper (Lamuyo)', ph: 6.0, ec: 2.5, icon: <RiFocus3Line /> },
         { id: 'alg-str-alb', name: 'Strawberry (Albion)', ph: 5.8, ec: 1.8, icon: <RiFocus3Line /> },
-        { id: 'alg-let-bat', name: 'Lettuce (Batavia)', ph: 6.0, ec: 1.5, icon: <RiLeafLine /> },
+        { id: 'alg-let-bat', name: 'Lettuce (Batavia)', ph: 6.0, ec: 1.5, icon: <RiFocus3Line /> },
     ],
     "LEAFY GREENS": [
-        { id: 'let-ll', name: 'Lettuce (Loose Leaf)', ph: 6.0, ec: 1.0, icon: <RiLeafLine /> },
-        { id: 'let-rm', name: 'Lettuce (Romaine)', ph: 6.2, ec: 1.2, icon: <RiLeafLine /> },
-        { id: 'spin', name: 'Spinach', ph: 6.5, ec: 1.8, icon: <RiLeafLine /> },
-        { id: 'kale', name: 'Kale (Curly)', ph: 6.0, ec: 2.0, icon: <RiLeafLine /> },
-    ],
-    "HERBS": [
-        { id: 'bas-it', name: 'Basil (Italian)', ph: 6.0, ec: 1.6, icon: <RiLeafLine /> },
-        { id: 'mint', name: 'Mint (Peppermint)', ph: 6.5, ec: 2.2, icon: <RiLeafLine /> },
-        { id: 'cil', name: 'Cilantro', ph: 6.0, ec: 1.4, icon: <RiLeafLine /> },
+        { id: 'let-ll', name: 'Lettuce (Loose Leaf)', ph: 6.0, ec: 1.0, icon: <RiFocus3Line /> },
+        { id: 'let-rm', name: 'Lettuce (Romaine)', ph: 6.2, ec: 1.2, icon: <RiFocus3Line /> },
     ]
 };
 
 const Hydroponics = () => {
     const { t } = useI18n();
+    const { setIsMissionActive, setActiveVariety } = usePlatform();
 
-    // VARIETAL STATE
     const [searchTerm, setSearchTerm] = useState('');
-    const [selectedVariety, setSelectedVariety] = useState(MASTER_VAULT["ALGERIAN HERITAGE"][0]);
+    const [selectedVariety, setSelectedVarietyState] = useState(MASTER_VAULT["ALGERIAN HERITAGE"][0]);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-    // TELEMETRY
-    const [telemetry, setTelemetry] = useState({ ph: 7.0, ec: 1.0, p1: false, p2: false, p3: false, rssi: -60 });
+    const setSelectedVariety = (v) => {
+        setSelectedVarietyState(v);
+        setActiveVariety(v);
+    };
 
-    // MISSION STATE
+    useEffect(() => {
+        setActiveVariety(selectedVariety);
+    }, []);
+
+    const [telemetry, setTelemetry] = useState({ ph: 7.0, ec: 1.0, rssi: -60 });
     const [missionPlan, setMissionPlan] = useState(null);
     const [activeMission, setActiveMission] = useState(null);
     const [completedMissions, setCompletedMissions] = useState([]);
-
     const [autoPilot, setAutoPilot] = useState(false);
     const [isDosing, setIsDosing] = useState(false);
     const [emergencyStatus, setEmergencyStatus] = useState(false);
-
     const [nodeId] = useState(localStorage.getItem('agro_node_id') || 'AGRO_NODE_01');
     const [isCloudLinked, setIsCloudLinked] = useState(false);
 
     useEffect(() => {
         IoTProxy.connect(nodeId, setIsCloudLinked);
         const subId = `agrocore/telemetry/${nodeId}`;
-
         IoTProxy.client?.on('message', (topic, message) => {
             if (topic === subId) {
-                try {
-                    const data = JSON.parse(message.toString());
-                    setTelemetry(data);
-                } catch (e) { }
+                try { setTelemetry(JSON.parse(message.toString())); } catch (e) { }
             }
         });
-
         IoTProxy.client?.subscribe(subId);
         return () => { IoTProxy.client?.unsubscribe(subId); };
     }, [nodeId, isCloudLinked]);
-
-    const filteredVault = useMemo(() => {
-        const result = {};
-        Object.entries(MASTER_VAULT).forEach(([category, items]) => {
-            const matches = items.filter(i => i.name.toLowerCase().includes(searchTerm.toLowerCase()));
-            if (matches.length > 0) result[category] = matches;
-        });
-        return result;
-    }, [searchTerm]);
 
     const planMission = (silent = false) => {
         if (emergencyStatus) return;
@@ -88,17 +70,12 @@ const Hydroponics = () => {
         const phDelta = telemetry.ph - selectedVariety.ph;
         const ecDelta = selectedVariety.ec - telemetry.ec;
 
-        if (phDelta > 0.05) {
-            const cappedDur = Math.min(Math.round(phDelta * 10 * 375), 5000);
-            plan.push({ relay: 1, name: 'PH DOWN', duration: cappedDur, icon: <RiFlaskLine />, reason: `PH DRIFT (+${phDelta.toFixed(2)})` });
-        }
-
+        if (phDelta > 0.05) plan.push({ relay: 1, name: 'PH DOWN', duration: Math.min(Math.round(phDelta * 10 * 375), 5000), icon: <RiFlaskLine />, reason: `PH DRIFT (+${phDelta.toFixed(2)})` });
         if (ecDelta > 0.05) {
-            const cappedDur = Math.min(Math.round(ecDelta * 10 * 600), 5000);
-            plan.push({ relay: 2, name: 'NUTRIENT A', duration: cappedDur, icon: <RiPulseLine />, reason: `EC DEFICIT (-${ecDelta.toFixed(2)})` });
-            plan.push({ relay: 3, name: 'NUTRIENT B', duration: cappedDur, icon: <RiPulseLine />, reason: `EC DEFICIT (-${ecDelta.toFixed(2)})` });
+            const dur = Math.min(Math.round(ecDelta * 10 * 600), 5000);
+            plan.push({ relay: 2, name: 'NUTRIENT A', duration: dur, icon: <RiPulseLine />, reason: `EC DEFICIT (-${ecDelta.toFixed(2)})` });
+            plan.push({ relay: 3, name: 'NUTRIENT B', duration: dur, icon: <RiPulseLine />, reason: `EC DEFICIT (-${ecDelta.toFixed(2)})` });
         }
-
         if (plan.length > 0) {
             if (silent) return plan;
             setMissionPlan(plan);
@@ -108,20 +85,17 @@ const Hydroponics = () => {
     const runMission = async (p = missionPlan) => {
         if (isDosing || !p || emergencyStatus) return;
         setIsDosing(true);
+        setIsMissionActive(true);
         setMissionPlan(null);
-
         try {
             for (const step of p) {
                 if (emergencyStatus) break;
                 setActiveMission({ ...step, remaining: step.duration });
-                const startTime = Date.now();
+                const start = Date.now();
                 await IoTProxy.actuate(nodeId, step.relay, 'ON', step.duration);
-
                 const timer = setInterval(() => {
-                    const elapsed = Date.now() - startTime;
-                    setActiveMission(prev => prev ? { ...prev, remaining: Math.max(0, step.duration - elapsed) } : null);
+                    setActiveMission(prev => prev ? { ...prev, remaining: Math.max(0, step.duration - (Date.now() - start)) } : null);
                 }, 50);
-
                 await new Promise(r => setTimeout(r, step.duration + 500));
                 clearInterval(timer);
                 setActiveMission(null);
@@ -130,25 +104,25 @@ const Hydroponics = () => {
             }
         } finally {
             setIsDosing(false);
+            setIsMissionActive(false);
         }
     };
 
     const runEStop = () => {
-        setEmergencyStatus(true);
-        setAutoPilot(false);
+        setEmergencyStatus(true); setAutoPilot(false);
         IoTProxy.actuate(nodeId, 0, 'STOP', 0);
-        setActiveMission(null);
+        setActiveMission(null); setIsMissionActive(false);
         setCompletedMissions(p => [`!!! EMERGENCY STOP ACTIVATED !!!`, ...p]);
         setTimeout(() => setEmergencyStatus(false), 5000);
     };
 
     useEffect(() => {
         if (!autoPilot || isDosing || emergencyStatus) return;
-        const checkid = setInterval(() => {
+        const id = setInterval(() => {
             const plan = planMission(true);
-            if (plan && plan.length > 0) runMission(plan);
+            if (plan?.length > 0) runMission(plan);
         }, 15000);
-        return () => clearInterval(checkid);
+        return () => clearInterval(id);
     }, [autoPilot, isDosing, telemetry, selectedVariety, emergencyStatus]);
 
     return (
@@ -182,7 +156,6 @@ const Hydroponics = () => {
                             <span style={{ fontSize: '0.65rem', fontWeight: 800, color: isCloudLinked ? 'var(--primary)' : '#ef4444' }}>{isCloudLinked ? '● CONNECTED' : '○ DISCONNECTED'}</span>
                         </div>
                     </div>
-                    <div style={{ fontSize: '0.55rem', fontWeight: 900, opacity: 0.5 }}>PHASE 23 / DESIGN_SYNC</div>
                 </div>
             </header>
 
@@ -233,7 +206,6 @@ const Hydroponics = () => {
                         <div className="orb-container">
                             <div className="orb-pulse" />
                             <div className="orb-core">{telemetry.ph.toFixed(2)}</div>
-                            <div style={{ position: 'absolute', bottom: '0', fontSize: '0.6rem', fontWeight: 900, letterSpacing: '3px', opacity: 0.4 }}>LIVE FEEDBACK PH</div>
                         </div>
                         <div className="stat-grid" style={{ marginBottom: '1.5rem' }}>
                             <div className="stat-unit">
@@ -241,7 +213,7 @@ const Hydroponics = () => {
                                 <div style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--primary)' }}>{telemetry.ec.toFixed(2)}</div>
                             </div>
                             <div className="stat-unit">
-                                <div className="stat-label">UPLINK AT</div>
+                                <div className="stat-label">UPLINK</div>
                                 <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>{telemetry.rssi} dBm</div>
                             </div>
                         </div>
@@ -259,7 +231,6 @@ const Hydroponics = () => {
                                     <div className="progress-wrap">
                                         <div className="progress-active" style={{ width: `${(activeMission.remaining / activeMission.duration) * 100}%` }} />
                                     </div>
-                                    <div style={{ fontSize: '0.5rem', opacity: 0.5, marginTop: '5px' }}>{activeMission.reason} • LIMIT: 5.0S</div>
                                 </div>
                             ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -290,9 +261,8 @@ const Hydroponics = () => {
                                 <div style={{ flex: 1 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                         <span style={{ fontWeight: 800, fontSize: '0.7rem' }}>{step.name}</span>
-                                        <span style={{ fontSize: '0.7rem', fontWeight: 900, color: step.duration >= 5000 ? '#ef4444' : 'var(--primary)' }}>{(step.duration / 1000).toFixed(2)}s</span>
+                                        <span style={{ fontSize: '0.7rem', fontWeight: 900 }}>{(step.duration / 1000).toFixed(2)}s</span>
                                     </div>
-                                    <div style={{ fontSize: '0.5rem', opacity: 0.5 }}>{step.reason}</div>
                                 </div>
                             </div>
                         ))}
@@ -305,11 +275,7 @@ const Hydroponics = () => {
             )}
 
             {!autoPilot && !missionPlan && (
-                <button
-                    className="control-btn"
-                    style={{ position: 'fixed', bottom: '110px', right: '30px', width: 'auto', padding: '0.8rem 1.8rem', zIndex: 100, fontSize: '0.65rem' }}
-                    onClick={() => planMission()}
-                >
+                <button className="control-btn" style={{ position: 'fixed', bottom: '110px', right: '30px', width: 'auto', padding: '0.8rem 1.8rem', zIndex: 100, fontSize: '0.65rem' }} onClick={() => planMission()}>
                     <RiPlayCircleLine size="1.1rem" /> MANUAL MISSION
                 </button>
             )}

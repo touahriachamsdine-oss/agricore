@@ -101,6 +101,9 @@ export const PlatformProvider = ({ children }) => {
         }));
     };
 
+    const [isMissionActive, setIsMissionActive] = useState(false);
+    const [activeVariety, setActiveVariety] = useState(null);
+
     return (
         <PlatformContext.Provider value={{
             crops, setCrops,
@@ -111,7 +114,9 @@ export const PlatformProvider = ({ children }) => {
             journalEntries, setJournalEntries,
             alerts, setAlerts,
             pestCalendar, setPestCalendar,
-            weather, updateWeatherForLocation
+            weather, updateWeatherForLocation,
+            isMissionActive, setIsMissionActive,
+            activeVariety, setActiveVariety
         }}>
             {children}
         </PlatformContext.Provider>

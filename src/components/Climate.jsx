@@ -4,7 +4,7 @@ import { useI18n } from '../context/i18nContext';
 import { RiTempHotLine, RiMistLine, RiCloudLine, RiSunLine, RiWaterFlashLine } from 'react-icons/ri';
 
 const Climate = () => {
-    const { location } = usePlatform();
+    const { location, activeVariety } = usePlatform();
     const { t, locale } = useI18n();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -49,9 +49,20 @@ const Climate = () => {
 
     return (
         <div className="climate-module" style={{ color: 'var(--text-main)' }}>
-            <header style={{ marginBottom: 'var(--spacing-xl)' }}>
-                <h3 className="orbitron glow-text-primary" style={{ fontSize: '1.2rem', marginBottom: '8px' }}>{t('atmospheric_telemetry')}</h3>
-                <p className="text-dim" style={{ fontSize: '0.8rem' }}>LIVE SIGNAL: STABLE • COORDINATES: {location?.lat || '...'}, {location?.lng || '...'}</p>
+            <header style={{ marginBottom: 'var(--spacing-xl)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                    <h3 className="orbitron glow-text-primary" style={{ fontSize: '1.2rem', marginBottom: '8px' }}>{t('atmospheric_telemetry')}</h3>
+                    <p className="text-dim" style={{ fontSize: '0.8rem' }}>LIVE SIGNAL: STABLE • COORDINATES: {location?.lat || '...'}, {location?.lng || '...'}</p>
+                </div>
+                {activeVariety && (
+                    <div className="glass-panel" style={{ padding: '8px 15px', display: 'flex', alignItems: 'center', gap: '10px', background: 'rgba(153, 173, 122, 0.1)', border: '1px solid var(--secondary)' }}>
+                        <div style={{ color: 'var(--primary)', fontSize: '1.2rem' }}>{activeVariety.icon}</div>
+                        <div>
+                            <div style={{ fontSize: '0.6rem', fontWeight: 900, opacity: 0.6 }}>TARGET: {activeVariety.name.toUpperCase()}</div>
+                            <div style={{ fontSize: '0.75rem', fontWeight: 800 }}>PH {activeVariety.ph} • EC {activeVariety.ec}</div>
+                        </div>
+                    </div>
+                )}
             </header>
 
             <div className="climate-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--spacing-lg)', marginBottom: 'var(--spacing-xl)' }}>

@@ -15,7 +15,7 @@ import {
 import { PlatformProvider, usePlatform } from './context/PlatformContext';
 import { I18nProvider, useI18n } from './context/i18nContext';
 import FieldMap from './components/FieldMap';
-import CropTracker from './components/CropTracker';
+import SoilPlanting from './components/SoilPlanting';
 import GrowthJournal from './components/GrowthJournal';
 import ChatAssistant from './components/ChatAssistant';
 import Climate from './components/Climate';
@@ -24,7 +24,7 @@ import Hydroponics from './components/Hydroponics';
 const AppContent = () => {
   const [activeModule, setActiveModule] = useState('dashboard');
   const [nightMode, setNightMode] = useState(false);
-  const { weather, alerts } = usePlatform();
+  const { weather, alerts, isMissionActive } = usePlatform();
   const { t, locale, setLocale, isRTL } = useI18n();
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
 
@@ -41,17 +41,17 @@ const AppContent = () => {
   const navItems = [
     { id: 'dashboard', label: t('dashboard'), icon: <RiDashboardLine /> },
     { id: 'map', label: t('map'), icon: <RiMapPinLine /> },
-    { id: 'tracker', label: t('tracker'), icon: <RiPlantLine /> },
+    { id: 'soil', label: 'Soil Planting', icon: <RiPlantLine /> },
     { id: 'journal', label: t('journal'), icon: <RiBookReadLine /> },
     { id: 'chat', label: t('chat_agent'), icon: <RiMessage3Line /> },
     { id: 'climate', label: t('climate'), icon: <RiCloudLine /> },
-    { id: 'hydro', label: 'Hydroponics', icon: <RiDropLine /> },
+    { id: 'hydro', label: 'Hydroponics', icon: <RiDropLine /> + (isMissionActive ? ' ●' : '') },
   ];
 
   const renderModule = () => {
     switch (activeModule) {
       case 'map': return <FieldMap />;
-      case 'tracker': return <CropTracker />;
+      case 'soil': return <SoilPlanting />;
       case 'journal': return <GrowthJournal />;
       case 'chat': return <ChatAssistant />;
       case 'climate': return <Climate />;
