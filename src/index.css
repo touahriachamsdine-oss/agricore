@@ -4,8 +4,8 @@
   /* Cream Background */
   --bg-block: #DCCCAC;
   /* Sand / Block surface */
-  --bg-sidebar: #546B41;
-  /* Deep Sage Sidebar (Flipped for block contrast) */
+  --bg-sidebar: #F5F5DC;
+  /* Creamy Beige Sidebar */
 
   --primary: #546B41;
   /* Deep Sage */
@@ -17,8 +17,8 @@
   --text-main: #3d4a31;
   /* Darker Sage for readability */
   --text-dim: #6d7d5e;
-  --text-on-dark: #FFF8EC;
-  /* For Sidebar text */
+  --text-on-dark: #3d4a31;
+  /* Optimized for Beige Sidebar contrast */
 
   --glass: rgba(220, 204, 172, 0.4);
   /* Sand-tinted glass */
