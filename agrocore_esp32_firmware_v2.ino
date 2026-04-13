@@ -42,7 +42,7 @@ CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000};
 // HARDWARE STRATEGY
 // ---------------------------------------------------------
 #define PUMP_CHANNELS 3
-const int pumps[PUMP_CHANNELS] = {4, 5, 2}; // R1, R2, R3
+const int pumps[PUMP_CHANNELS] = {4, 5, 6}; // R1, R2, R3
 unsigned long pumpOffAt[PUMP_CHANNELS] = {0, 0, 0};
 bool activeLowLogic = true; // Set to false for Active-High relays
 
