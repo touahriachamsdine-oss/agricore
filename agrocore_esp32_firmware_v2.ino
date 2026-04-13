@@ -1,42 +1,30 @@
-/**
- * AGROCORE — THE NEURAL FIELD FABRIC
- * ESP32 Hydroponic Controller v2.0
- * 
- * New in v2.0:
- * - Local Profile Storage (Hardware Fallback)
- * - Enhanced Neural Monitoring
- */
-
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
-#include <PubSubClient.h> // PLEASE INSTALL THIS LIBRARY IN ARDUINO IDE
+#include <PubSubClient.h> 
 
 // ---------------------------------------------------------
-// NEURAL IDENTITY & NETWORK
+// NETWORK IDENTITY (HOTEL EL EMIR)
 // ---------------------------------------------------------
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
-const char* agroId = "AGRO_NODE_01"; // UNIQUE CHANNEL ID
+const char* ssid = "HOTEL EL EMIR";
+const char* password = "1234567890";
+const char* agroId = "AGRO_NODE_01"; 
 
 // ---------------------------------------------------------
-// CLOUD RELAY SETTINGS (HiveMQ)
+// CLOUD RELAY SETTINGS
 // ---------------------------------------------------------
 const char* mqttServer = "broker.hivemq.com";
 const int mqttPort = 1883;
 const String actuationTopic = "agrocore/actuate/" + String(agroId);
+const String telemetryTopic = "agrocore/telemetry/" + String(agroId);
+const String controlTopic = "agrocore/control/" + String(agroId);
 
 // ---------------------------------------------------------
-// LOCAL CROP KNOWLEDGE (Hardware Fallback)
+// TELEMETRY SIMULATION (Neural State)
 // ---------------------------------------------------------
-struct CropProfile {
-  char name[20];
-  float targetPH;
-  float targetEC;
-  int doseDuration;
-};
-
-CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000}; 
+float simPH = 7.15;
+float simEC = 0.95;
+bool pumpsActive[4] = {false, false, false, false}; // 1-based index
 
 // ---------------------------------------------------------
 // HARDWARE DEFINITIONS (GPIO 4, 5, 6)
@@ -50,6 +38,14 @@ PubSubClient mqttClient(espClient);
 WebServer server(80);
 StaticJsonDocument<256> jsonDoc;
 
+// Advanced Timing Engine (Non-blocking pulses)
+struct PulseJob {
+  int pin;
+  unsigned long endTime;
+  bool active;
+};
+PulseJob activeJobs[4] = {{PH_DOWN_PUMP, 0, false}, {NUTRIENT_A_PUMP, 0, false}, {NUTRIENT_B_PUMP, 0, false}};
+
 void executePulse(int relay, int duration) {
   int targetPin = 0;
   if (relay == 1) targetPin = PH_DOWN_PUMP;
@@ -59,9 +55,26 @@ void executePulse(int relay, int duration) {
   if (targetPin != 0) {
     Serial.printf("EXECUTING NEURAL PULSE: Pin %d for %dms\n", targetPin, duration);
     digitalWrite(targetPin, LOW); 
-    delay(duration);
+    pumpsActive[relay] = true;
+    
+    // Simple delay for now, but simulated data will drift
+    delay(duration); 
+    
     digitalWrite(targetPin, HIGH);
+    pumpsActive[relay] = false;
+    
+    // Simulate immediate offset
+    if (relay == 1) simPH -= (duration / 1000.0) * 0.1;
+    if (relay == 2 || relay == 3) simEC += (duration / 1000.0) * 0.2;
   }
+}
+
+void emergencyStop() {
+  Serial.println("!!! GLOBAL EMERGENCY STOP !!!");
+  digitalWrite(PH_DOWN_PUMP, HIGH);
+  digitalWrite(NUTRIENT_A_PUMP, HIGH);
+  digitalWrite(NUTRIENT_B_PUMP, HIGH);
+  for(int i=0; i<4; i++) pumpsActive[i] = false;
 }
 
 // MQTT Message Receiver
@@ -71,9 +84,16 @@ void onNeuralImpulse(char* topic, byte* payload, unsigned int length) {
   
   Serial.println("CLOUD-LINK IMPULSE: " + message);
   
+  if (message.indexOf("STOP") != -1) {
+    emergencyStop();
+    return;
+  }
+
   DeserializationError error = deserializeJson(jsonDoc, message);
   if (!error) {
-    executePulse(jsonDoc["relay"], jsonDoc["duration"]);
+    if (jsonDoc.containsKey("relay") && jsonDoc.containsKey("duration")) {
+        executePulse(jsonDoc["relay"], jsonDoc["duration"]);
+    }
   }
 }
 
@@ -96,23 +116,13 @@ void setup() {
   }
   Serial.println("\nAGROCORE NODE ONLINE");
   Serial.printf("LOCAL IP: %s\n", WiFi.localIP().toString().c_str());
-  Serial.printf("CLOUD PAIRING ID: %s\n", agroId);
 
   // Configure MQTT
   mqttClient.setServer(mqttServer, mqttPort);
   mqttClient.setCallback(onNeuralImpulse);
 
   server.on("/status", HTTP_GET, [](){
-    server.send(200, "application/json", "{\"node\":\"" + String(agroId) + "\",\"mode\":\"HYBRID\"}");
-  });
-  
-  // Also keep HTTP actuate for local dev stability
-  server.on("/actuate", HTTP_POST, [](){
-    if (server.hasArg("plain")) {
-        deserializeJson(jsonDoc, server.arg("plain"));
-        executePulse(jsonDoc["relay"], jsonDoc["duration"]);
-        server.send(200, "application/json", "{\"status\":\"ok\"}");
-    }
+    server.send(200, "application/json", "{\"node\":\"" + String(agroId) + "\",\"mode\":\"AUTONOMOUS\"}");
   });
   
   server.begin();
@@ -124,11 +134,27 @@ void reconnectCloud() {
     if (mqttClient.connect(agroId)) {
       Serial.println("CONNECTED");
       mqttClient.subscribe(actuationTopic.c_str());
+      mqttClient.subscribe(controlTopic.c_str());
     } else {
       Serial.printf("FAILED (rc=%d), retrying in 5s...\n", mqttClient.state());
       delay(5000);
     }
   }
+}
+
+void sendTelemetry() {
+  StaticJsonDocument<256> tel;
+  tel["ph"] = simPH;
+  tel["ec"] = simEC;
+  tel["p1"] = pumpsActive[1];
+  tel["p2"] = pumpsActive[2];
+  tel["p3"] = pumpsActive[3];
+  tel["rssi"] = WiFi.RSSI();
+  
+  String out;
+  serializeJson(tel, out);
+  mqttClient.publish(telemetryTopic.c_str(), out.c_str());
+  Serial.println("TELEMETRY UPLINK: " + out);
 }
 
 void loop() {
@@ -139,15 +165,13 @@ void loop() {
   }
   mqttClient.loop();
   
-  static unsigned long lastCheck = 0;
-  if (millis() - lastCheck > 15000) { 
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("STATUS: [ONLINE] RSSI: %d dBm | CLOUD: %s\n", 
-                    WiFi.RSSI(), mqttClient.connected() ? "READY" : "ERR");
-    } else {
-      WiFi.disconnect();
-      WiFi.begin(ssid, password);
-    }
-    lastCheck = millis();
+  static unsigned long lastTel = 0;
+  if (millis() - lastTel > 5000) { 
+    // Add minor drift
+    simPH += 0.005; 
+    simEC -= 0.002;
+    
+    sendTelemetry();
+    lastTel = millis();
   }
 }

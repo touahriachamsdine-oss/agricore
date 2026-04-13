@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     RiSettings3Line,
     RiFlaskLine,
@@ -10,41 +10,31 @@ import {
     RiFocus3Line,
     RiSearchEyeLine,
     RiCheckboxCircleLine,
-    RiCloseCircleLine
+    RiCloseCircleLine,
+    RiAlertLine,
+    RiRadarLine,
+    RiSunLine
 } from 'react-icons/ri';
 import { useI18n } from '../context/i18nContext';
 import { IoTProxy } from '../services/IoTProxy';
 
 const MASTER_VAULT = {
+    "ALGERIAN HERITAGE": [
+        { id: 'alg-tom-tym', name: 'Tomato (Tymador)', ph: 6.2, ec: 2.8, icon: <RiFocus3Line /> },
+        { id: 'alg-pep-lam', name: 'Pepper (Lamuyo)', ph: 6.0, ec: 2.5, icon: <RiFocus3Line /> },
+        { id: 'alg-str-alb', name: 'Strawberry (Albion)', ph: 5.8, ec: 1.8, icon: <RiFocus3Line /> },
+        { id: 'alg-let-bat', name: 'Lettuce (Batavia)', ph: 6.0, ec: 1.5, icon: <RiLeafLine /> },
+    ],
     "LEAFY GREENS": [
         { id: 'let-ll', name: 'Lettuce (Loose Leaf)', ph: 6.0, ec: 1.0, icon: <RiLeafLine /> },
         { id: 'let-rm', name: 'Lettuce (Romaine)', ph: 6.2, ec: 1.2, icon: <RiLeafLine /> },
         { id: 'spin', name: 'Spinach', ph: 6.5, ec: 1.8, icon: <RiLeafLine /> },
         { id: 'kale', name: 'Kale (Curly)', ph: 6.0, ec: 2.0, icon: <RiLeafLine /> },
-        { id: 'arug', name: 'Arugula', ph: 6.0, ec: 1.4, icon: <RiLeafLine /> },
-        { id: 'chard', name: 'Swiss Chard', ph: 6.2, ec: 1.8, icon: <RiLeafLine /> },
-        { id: 'bok', name: 'Bok Choy', ph: 6.5, ec: 2.0, icon: <RiLeafLine /> },
     ],
     "HERBS": [
         { id: 'bas-it', name: 'Basil (Italian)', ph: 6.0, ec: 1.6, icon: <RiLeafLine /> },
-        { id: 'bas-th', name: 'Basil (Thai)', ph: 6.2, ec: 1.8, icon: <RiLeafLine /> },
         { id: 'mint', name: 'Mint (Peppermint)', ph: 6.5, ec: 2.2, icon: <RiLeafLine /> },
         { id: 'cil', name: 'Cilantro', ph: 6.0, ec: 1.4, icon: <RiLeafLine /> },
-        { id: 'pars', name: 'Parsley', ph: 6.0, ec: 1.8, icon: <RiLeafLine /> },
-        { id: 'chive', name: 'Chives', ph: 6.2, ec: 1.8, icon: <RiLeafLine /> },
-        { id: 'dill', name: 'Dill', ph: 5.8, ec: 1.2, icon: <RiLeafLine /> },
-    ],
-    "FRUITING": [
-        { id: 'tom-ch', name: 'Tomato (Cherry)', ph: 6.2, ec: 2.5, icon: <RiFocus3Line /> },
-        { id: 'tom-bf', name: 'Tomato (Beefsteak)', ph: 6.4, ec: 3.0, icon: <RiFocus3Line /> },
-        { id: 'pep-bl', name: 'Pepper (Bell)', ph: 6.0, ec: 2.2, icon: <RiFocus3Line /> },
-        { id: 'pep-ha', name: 'Pepper (Habanero)', ph: 6.2, ec: 2.4, icon: <RiFocus3Line /> },
-        { id: 'cuc', name: 'Cucumber', ph: 5.8, ec: 2.0, icon: <RiFocus3Line /> },
-        { id: 'strw', name: 'Strawberry', ph: 6.0, ec: 1.8, icon: <RiFocus3Line /> },
-    ],
-    "COLE CROPS": [
-        { id: 'broc', name: 'Broccoli', ph: 6.5, ec: 2.8, icon: <RiFocus3Line /> },
-        { id: 'cabb', name: 'Cabbage', ph: 6.8, ec: 2.5, icon: <RiFocus3Line /> },
     ]
 };
 
@@ -53,32 +43,44 @@ const Hydroponics = () => {
 
     // VARIETAL STATE
     const [searchTerm, setSearchTerm] = useState('');
-    const [selectedVariety, setSelectedVariety] = useState(MASTER_VAULT["LEAFY GREENS"][0]);
+    const [selectedVariety, setSelectedVariety] = useState(MASTER_VAULT["ALGERIAN HERITAGE"][0]);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-    // TELEMETRY
-    const [currentPH, setCurrentPH] = useState(7.0);
-    const [currentEC, setCurrentEC] = useState(1.0);
+    // TELEMETRY (Live from ESP32)
+    const [telemetry, setTelemetry] = useState({ ph: 7.0, ec: 1.0, p1: false, p2: false, p3: false, rssi: 0 });
+    const [lastUplink, setLastUplink] = useState(Date.now());
 
-    // ACTUATION
+    // AUTOMATION STATE
+    const [autoPilot, setAutoPilot] = useState(false);
     const [missionPlan, setMissionPlan] = useState(null);
     const [isDosing, setIsDosing] = useState(false);
     const [logs, setLogs] = useState([]);
-    const [activeRelay, setActiveRelay] = useState(null);
+    const [emergencyStatus, setEmergencyStatus] = useState(false);
 
     // NETWORK
     const [nodeId, setNodeId] = useState(localStorage.getItem('agro_node_id') || 'AGRO_NODE_01');
-    const [esp32Ip, setEsp32Ip] = useState(localStorage.getItem('agro_node_ip') || '192.168.1.185');
     const [isCloudLinked, setIsCloudLinked] = useState(false);
-    const [isOnline, setIsOnline] = useState(false);
+
+    const addLog = useCallback((msg) => setLogs(p => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...p.slice(0, 5)]), []);
 
     useEffect(() => {
         IoTProxy.connect(nodeId, setIsCloudLinked);
-        const check = async () => { setIsOnline((await IoTProxy.checkLink(esp32Ip)).online); };
-        check();
-        const tid = setInterval(check, 10000);
-        return () => clearInterval(tid);
-    }, [nodeId, esp32Ip]);
+        const subId = `agrocore/telemetry/${nodeId}`;
+
+        // MQTT Telemetry Subscriber
+        IoTProxy.client?.on('message', (topic, message) => {
+            if (topic === subId) {
+                try {
+                    const data = JSON.parse(message.toString());
+                    setTelemetry(data);
+                    setLastUplink(Date.now());
+                } catch (e) { }
+            }
+        });
+
+        IoTProxy.client?.subscribe(subId);
+        return () => { IoTProxy.client?.unsubscribe(subId); };
+    }, [nodeId, isCloudLinked]);
 
     const filteredVault = useMemo(() => {
         const result = {};
@@ -89,182 +91,156 @@ const Hydroponics = () => {
         return result;
     }, [searchTerm]);
 
-    const addLog = (msg) => setLogs(p => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...p.slice(0, 4)]);
-
-    const planMission = () => {
+    const planMission = (silent = false) => {
+        if (emergencyStatus) return;
         const plan = [];
-        // PH Pulse: 375ms per 0.1 PH delta (1/4 scale of 1500)
-        if (currentPH > selectedVariety.ph) {
-            const delta = currentPH - selectedVariety.ph;
-            const duration = Math.round(delta * 10 * 375);
-            plan.push({ relay: 1, name: 'PH DOWN', duration, icon: <RiFlaskLine />, reason: `PH high (+${delta.toFixed(2)})` });
+        const phDelta = telemetry.ph - selectedVariety.ph;
+        const ecDelta = selectedVariety.ec - telemetry.ec;
+
+        if (phDelta > 0.1) {
+            const dur = Math.round(phDelta * 10 * 375);
+            plan.push({ relay: 1, name: 'PH DOWN', duration: dur, icon: <RiFlaskLine />, reason: `PH HIGH (+${phDelta.toFixed(2)})` });
         }
 
-        // EC Pulse: 500ms per 0.1 EC delta (1/4 scale of 2000)
-        if (currentEC < selectedVariety.ec) {
-            const delta = selectedVariety.ec - currentEC;
-            const duration = Math.round(delta * 10 * 500);
-            plan.push({ relay: 2, name: 'NUTRIENT A', duration, icon: <RiPulseLine />, reason: `EC deficit (-${delta.toFixed(2)})` });
-            plan.push({ relay: 3, name: 'NUTRIENT B', duration, icon: <RiPulseLine />, reason: `EC deficit (-${delta.toFixed(2)})` });
+        if (ecDelta > 0.1) {
+            const dur = Math.round(ecDelta * 10 * 500);
+            plan.push({ relay: 2, name: 'NUTRIENT A', duration: dur, icon: <RiPulseLine />, reason: `EC DEFICIT (-${ecDelta.toFixed(2)})` });
+            plan.push({ relay: 3, name: 'NUTRIENT B', duration: dur, icon: <RiPulseLine />, reason: `EC DEFICIT (-${ecDelta.toFixed(2)})` });
         }
 
-        if (plan.length === 0) {
-            addLog("ANALYSIS: System state within botanical limits.");
-        } else {
+        if (plan.length > 0) {
+            if (silent) return plan;
             setMissionPlan(plan);
+        } else if (!silent) {
+            addLog("ANALYSIS: System state within botanical limits.");
         }
     };
 
-    const runMission = async () => {
-        if (isDosing || !missionPlan) return;
+    const runMission = async (p = missionPlan) => {
+        if (isDosing || !p || emergencyStatus) return;
         setIsDosing(true);
-        const targetId = isCloudLinked ? nodeId : esp32Ip;
+        setMissionPlan(null);
 
         try {
-            for (const step of missionPlan) {
-                if (step.duration <= 0) continue;
-                addLog(`EXECUTING: ${step.name} for ${step.duration}ms`);
-                setActiveRelay(step.relay);
-                await IoTProxy.actuate(targetId, step.relay, 'ON', step.duration);
-                await new Promise(r => setTimeout(r, step.duration + 1000));
-                setActiveRelay(null);
+            for (const step of p) {
+                if (emergencyStatus) break;
+                addLog(`EXECUTING: ${step.name} (${(step.duration / 1000).toFixed(1)}s)`);
+                await IoTProxy.actuate(nodeId, step.relay, 'ON', step.duration);
+                await new Promise(r => setTimeout(r, step.duration + 2000));
             }
-            addLog("MISSION COMPLETE: Neural state normalized.");
-            setMissionPlan(null);
+            if (!emergencyStatus) addLog("MISSION COMPLETE: State normalized.");
         } catch (err) {
-            addLog("ERROR: Actuation failure.");
+            addLog("ERROR: Actuation bridge interrupted.");
         } finally {
             setIsDosing(false);
         }
     };
 
-    const runQuickTest = async () => {
-        if (isDosing) return;
-        setIsDosing(true);
-        addLog("LINK TEST: Firing sequence [SOL A] for 500ms...");
-        try {
-            const targetId = isCloudLinked ? nodeId : esp32Ip;
-            setActiveRelay(2);
-            await IoTProxy.actuate(targetId, 2, 'ON', 500);
-            await new Promise(r => setTimeout(r, 1500));
-            addLog("TEST COMPLETE: Hardware responsive.");
-        } catch (err) {
-            addLog("TEST FAILED: Link stalling.");
-        } finally {
-            setIsDosing(false);
-            setActiveRelay(null);
-        }
+    const runEStop = () => {
+        setEmergencyStatus(true);
+        setAutoPilot(false);
+        IoTProxy.actuate(nodeId, 0, 'STOP', 0); // Special stop command
+        addLog("!!! EMERGENCY STOP ACTIVE !!!");
+        setTimeout(() => setEmergencyStatus(false), 5000);
     };
+
+    // Auto-Pilot Control Loop
+    useEffect(() => {
+        if (!autoPilot || isDosing || emergencyStatus) return;
+
+        const checkid = setInterval(() => {
+            const plan = planMission(true);
+            if (plan && plan.length > 0) {
+                addLog("AUTO-PILOT: Deficit detected. Executing corrective pulses...");
+                runMission(plan);
+            }
+        }, 30000); // Check every 30s
+
+        return () => clearInterval(checkid);
+    }, [autoPilot, isDosing, telemetry, selectedVariety, emergencyStatus, runMission]);
 
     return (
-        <div className="oracle-dashboard animate-fade">
+        <div className="oasis-dashboard animate-fade">
             <style>{`
-                .oracle-dashboard { color: var(--primary); padding-bottom: 50px; }
-                .glass-card { background: rgba(255,255,255,0.02); backdrop-filter: blur(15px); border: 1px solid rgba(255,255,255,0.05); border-radius: 24px; padding: 2rem; box-shadow: 0 8px 32px rgba(0,0,0,0.1); }
+                :root { --sahara-sand: #e6be8a; --sahara-dusk: #c2410c; --oasis-teal: #14b8a6; }
+                .oasis-dashboard { color: white; padding-bottom: 50px; font-family: 'Inter', sans-serif; }
+                .sahara-glass { background: rgba(194, 65, 12, 0.05); backdrop-filter: blur(20px); border: 1px solid rgba(230, 190, 138, 0.1); border-radius: 32px; padding: 2.5rem; }
                 
-                .oracle-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3rem; }
-                .node-badge { display: flex; align-items: center; gap: 12px; background: rgba(0,0,0,0.2); padding: 8px 20px; border-radius: 100px; border: 1px solid rgba(153, 173, 122, 0.2); font-size: 0.7rem; font-weight: 800; font-family: 'Orbitron'; }
-                .status-pin { width: 8px; height: 8px; border-radius: 50%; }
+                .header-flex { display: flex; justify-content: space-between; align-items: center; margin-bottom: 3rem; }
+                .status-chip { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.3); padding: 8px 18px; border-radius: 100px; font-size: 0.65rem; font-weight: 800; border: 1px solid rgba(255,255,255,0.05); }
+                .pulse-glow { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 10px currentColor; }
                 
-                .main-oracle-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 2rem; }
+                .main-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 2.5rem; }
                 
-                .variety-selector { cursor: pointer; position: relative; }
-                .selector-display { display: flex; align-items: center; gap: 15px; padding: 1.5rem; background: rgba(153, 173, 122, 0.1); border-radius: 18px; border: 1px solid var(--secondary); transition: all 0.3s; }
-                .selector-display:hover { background: rgba(153, 173, 122, 0.2); transform: scale(1.02); }
-                .variety-icon { font-size: 2rem; color: var(--secondary); }
+                .variety-card { cursor: pointer; position: relative; background: rgba(0,0,0,0.2); padding: 1.5rem; border-radius: 24px; border: 1px solid rgba(230, 190, 138, 0.2); transition: 0.3s; }
+                .variety-card:hover { border-color: var(--sahara-sand); transform: translateY(-3px); }
                 
-                .vault-dropdown { position: absolute; top: 100%; left: 0; right: 0; z-index: 1000; margin-top: 10px; max-height: 400px; overflow-y: auto; background: #fffdf9; border-radius: 18px; border: 1px solid #ddd; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
-                .vault-search { padding: 1rem; border-bottom: 1px solid #eee; position: sticky; top: 0; background: white; }
-                .vault-search input { width: 100%; border: none; font-family: 'Orbitron'; font-size: 0.8rem; outline: none; color: black; }
-                .vault-cat { font-size: 0.6rem; font-weight: 900; opacity: 0.4; padding: 1rem 1rem 0.5rem; letter-spacing: 2px; color: black; }
-                .vault-item { padding: 0.8rem 1rem; display: flex; align-items: center; gap: 10px; cursor: pointer; transition: 0.2s; font-size: 0.85rem; font-weight: 600; color: black; }
-                .vault-item:hover { background: var(--secondary); color: white; }
+                .vault-dropdown { position: absolute; top: 105%; left: 0; right: 0; z-index: 1000; background: #1a1a1a; border-radius: 20px; border: 1px solid #333; max-height: 500px; overflow-y: auto; }
+                .vault-search { padding: 1.2rem; border-bottom: 1px solid #222; }
+                .vault-search input { width: 100%; background: #000; border: 1px solid #444; color: white; padding: 0.8rem; border-radius: 12px; font-family: 'Orbitron'; font-size: 0.75rem; }
+                .vault-item { padding: 1rem 1.5rem; display: flex; align-items: center; gap: 12px; transition: 0.2s; color: #aaa; font-weight: 500; cursor: pointer; }
+                .vault-item:hover { background: var(--sahara-dusk); color: white; }
 
-                .stat-ring { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1.5rem; }
-                .ring-box { text-align: center; padding: 1rem; border-radius: 14px; background: rgba(0,0,0,0.03); border: 1px solid rgba(0,0,0,0.05); }
-                .ring-val { font-family: 'Orbitron'; font-size: 1.2rem; font-weight: 900; color: var(--secondary); }
-                .ring-lab { font-size: 0.55rem; font-weight: 900; opacity: 0.5; margin-top: 5px; }
+                .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.5rem; margin-top: 2rem; }
+                .stat-card { background: rgba(0,0,0,0.2); padding: 1.5rem; border-radius: 20px; text-align: center; border: 1px solid rgba(255,255,255,0.05); }
+                .stat-value { font-family: 'Orbitron'; font-size: 2rem; font-weight: 900; color: var(--sahara-sand); }
+                .stat-label { font-size: 0.6rem; opacity: 0.4; letter-spacing: 2px; margin-top: 5px; }
 
-                .telemetry-input { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 2rem; }
-                .input-block label { display: block; font-size: 0.6rem; font-weight: 900; margin-bottom: 8px; opacity: 0.6; }
-                .input-block input { width: 100%; background: white; border: 2px solid var(--accent); padding: 1rem; border-radius: 12px; font-family: 'Orbitron'; font-size: 1.1rem; color: var(--primary); }
+                .auto-pilot-toggle { width: 100%; margin-top: 2rem; background: linear-gradient(135deg, #c2410c, #ea580c); color: white; padding: 1.5rem; border-radius: 20px; border: none; font-family: 'Orbitron'; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 12px; transition: 0.3s; }
+                .auto-pilot-toggle.active { background: linear-gradient(135deg, #14b8a6, #0d9488); }
+                .auto-pilot-toggle:hover { opacity: 0.9; transform: scale(0.98); }
 
-                .mission-btn { width: 100%; margin-top: 2rem; padding: 1.2rem; border-radius: 14px; border: none; background: var(--primary); color: white; font-family: 'Orbitron'; font-size: 0.9rem; letter-spacing: 1px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; transition: 0.3s; }
-                .mission-btn:hover { background: var(--secondary); box-shadow: 0 10px 25px rgba(153, 173, 122, 0.3); }
-
-                .mission-plan-overlay { position: fixed; inset: 0; z-index: 2000; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; padding: 2rem; backdrop-filter: blur(5px); }
-                .plan-card { width: 100%; max-width: 450px; background: white; border-radius: 24px; padding: 2rem; }
-                .plan-header { margin-bottom: 1.5rem; border-bottom: 1px solid #eee; padding-bottom: 1rem; }
-                .plan-step { display: flex; align-items: center; gap: 15px; padding: 12px; border-radius: 12px; background: #f9f9f9; margin-bottom: 10px; border: 1px solid #eee; }
-                .step-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--secondary); color: white; display: flex; align-items: center; justify-content: center; }
-                .step-info { flex: 1; }
-                .step-title { font-weight: 800; font-size: 0.8rem; color: black; }
-                .step-dur { font-size: 0.7rem; color: #888; font-weight: 700; }
-
-                .relay-mon { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 2rem; }
-                .relay-card { padding: 1rem; border-radius: 18px; border: 1px solid rgba(0,0,0,0.05); background: rgba(0,0,0,0.02); text-align: center; }
-                .relay-card.active { border-color: var(--secondary); background: rgba(153, 173, 122, 0.15); animation: pulse-border 1s infinite alternate; }
+                .estop-btn { position: fixed; bottom: 40px; right: 40px; width: 80px; height: 80px; border-radius: 50%; background: #ef4444; border: 8px solid rgba(255,255,255,0.1); color: white; display: flex; align-items: center; justify-content: center; font-size: 2rem; cursor: pointer; box-shadow: 0 0 30px rgba(239, 68, 68, 0.4); z-index: 1000; transition: 0.2s; }
+                .estop-btn:active { transform: scale(0.9); }
                 
-                @keyframes pulse-border { from { border-color: transparent; } to { border-color: var(--secondary); } }
-                .spin { animation: rotate 2s linear infinite; }
+                .telemetry-orb { width: 100%; height: 200px; background: radial-gradient(circle at center, rgba(194, 65, 12, 0.1) 0%, transparent 70%); position: relative; margin-bottom: 2rem; display: flex; align-items: center; justify-content: center; }
+                .orb-active { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px dashed rgba(230, 190, 138, 0.3); animation: rotate 10s linear infinite; }
+                
                 @keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                .blink { animation: blink 1s infinite; }
+                @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
             `}</style>
 
-            <header className="oracle-header">
+            <header className="header-flex">
                 <div>
-                    <h2 className="orbitron glow-text-primary">BOTANICAL ORACLE</h2>
-                    <p className="text-dim">AGROCORE NEURAL FABRIC v4.0</p>
+                    <h1 className="orbitron sahara-glow-text" style={{ fontSize: '1.8rem', letterSpacing: '4px' }}>ALGERIAN OASIS</h1>
+                    <p style={{ opacity: 0.4, fontWeight: 800, fontSize: '0.7rem' }}>NEURAL FEEDBACK LOOP ACTIVE • {nodeId}</p>
                 </div>
-                <div className="node-info" style={{ display: 'flex', gap: '15px' }}>
-                    <div className="node-badge">
-                        <div className="status-pin" style={{ background: isCloudLinked ? '#4CAF50' : '#c62828' }} />
-                        CLOUD: {isCloudLinked ? 'STABLE' : 'STALLED'}
+                <div style={{ display: 'flex', gap: '15px' }}>
+                    <div className="status-chip">
+                        <div className="pulse-glow" style={{ color: isCloudLinked ? '#14b8a6' : '#ef4444' }} />
+                        {isCloudLinked ? 'NEXUS LINKED' : 'NEXUS STALLED'}
                     </div>
-                    <div className="node-badge">
-                        <div className="status-pin" style={{ background: isOnline ? '#4CAF50' : '#888' }} />
-                        LOCAL: {isOnline ? 'STABLE' : 'STALLED'}
+                    <div className="status-chip">
+                        <RiSunLine color="var(--sahara-sand)" />
+                        {new Date().toLocaleTimeString()}
                     </div>
                 </div>
             </header>
 
-            <main className="main-oracle-grid">
-                {/* LEFT: ORACLE CONFIG */}
-                <div className="oracle-controls">
-                    <div className="glass-card">
-                        <div className="variety-selector">
-                            <label className="ring-lab" style={{ display: 'block', marginBottom: '10px' }}>ACTIVE SPECIES</label>
-                            <div className="selector-display" onClick={() => setIsSearchOpen(!isSearchOpen)}>
-                                <span className="variety-icon">{selectedVariety.icon}</span>
-                                <div style={{ flex: 1 }}>
-                                    <div className="orbitron" style={{ fontWeight: 900 }}>{selectedVariety.name}</div>
-                                    <div style={{ fontSize: '0.65rem', opacity: 0.6 }}>SPECIES ID: {selectedVariety.id}</div>
+            <main className="main-grid">
+                {/* LEFT: SPECIES & TARGETS */}
+                <div className="oracle-side">
+                    <div className="sahara-glass">
+                        <div className="variety-card" onClick={() => setIsSearchOpen(!isSearchOpen)}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
+                                <div style={{ fontSize: '2.5rem', color: 'var(--sahara-sand)' }}>{selectedVariety.icon}</div>
+                                <div>
+                                    <div className="orbitron" style={{ fontWeight: 900, fontSize: '1.1rem' }}>{selectedVariety.name}</div>
+                                    <div style={{ fontSize: '0.6rem', opacity: 0.4, letterSpacing: '2px' }}>SPECIES ID: {selectedVariety.id}</div>
                                 </div>
-                                <RiSearchEyeLine size={20} />
                             </div>
 
                             {isSearchOpen && (
-                                <div className="vault-dropdown animate-fade-down">
+                                <div className="vault-dropdown">
                                     <div className="vault-search">
-                                        <input
-                                            autoFocus
-                                            placeholder="SEARCH BOTANICAL VAULT..."
-                                            value={searchTerm}
-                                            onChange={e => setSearchTerm(e.target.value)}
-                                        />
+                                        <input autoFocus placeholder="SEARCH THE OASIS..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} onClick={e => e.stopPropagation()} />
                                     </div>
                                     {Object.entries(filteredVault).map(([cat, items]) => (
                                         <div key={cat}>
-                                            <div className="vault-cat">{cat}</div>
+                                            <div style={{ fontSize: '0.55rem', padding: '10px 20px', background: '#222', letterSpacing: '3px' }}>{cat}</div>
                                             {items.map(item => (
-                                                <div
-                                                    className="vault-item"
-                                                    key={item.id}
-                                                    onClick={() => {
-                                                        setSelectedVariety(item);
-                                                        setIsSearchOpen(false);
-                                                        setSearchTerm('');
-                                                    }}
-                                                >
+                                                <div className="vault-item" key={item.id} onClick={(e) => { e.stopPropagation(); setSelectedVariety(item); setIsSearchOpen(false); }}>
                                                     {item.icon} {item.name}
                                                 </div>
                                             ))}
@@ -274,110 +250,103 @@ const Hydroponics = () => {
                             )}
                         </div>
 
-                        <div className="stat-ring">
-                            <div className="ring-box">
-                                <div className="ring-val">{selectedVariety.ph}</div>
-                                <div className="ring-lab">TARGET PH</div>
+                        <div className="stat-grid">
+                            <div className="stat-card">
+                                <div className="stat-label">TARGET PH</div>
+                                <div className="stat-value">{selectedVariety.ph}</div>
                             </div>
-                            <div className="ring-box">
-                                <div className="ring-val">{selectedVariety.ec}</div>
-                                <div className="ring-lab">TARGET EC</div>
-                            </div>
-                        </div>
-
-                        <div className="telemetry-input">
-                            <div className="input-block">
-                                <label>MEASURED PH</label>
-                                <input type="number" step="0.1" value={currentPH} onChange={e => setCurrentPH(parseFloat(e.target.value))} />
-                            </div>
-                            <div className="input-block">
-                                <label>MEASURED EC</label>
-                                <input type="number" step="0.1" value={currentEC} onChange={e => setCurrentEC(parseFloat(e.target.value))} />
+                            <div className="stat-card">
+                                <div className="stat-label">TARGET EC</div>
+                                <div className="stat-value">{selectedVariety.ec}</div>
                             </div>
                         </div>
 
-                        <div className="mission-actions" style={{ display: 'grid', gridTemplateColumns: '3fr 1fr', gap: '10px' }}>
-                            <button className="mission-btn" onClick={planMission}>
-                                <RiPulseLine className={isDosing ? 'spin' : ''} />
-                                <span>PLAN NEURAL MISSION</span>
-                            </button>
-                            <button className="mission-btn test-btn" onClick={runQuickTest} disabled={isDosing} style={{ marginTop: '2rem', height: 'auto', background: 'rgba(0,0,0,0.05)', color: 'var(--primary)', border: '1px solid #ddd' }}>
-                                <RiCheckboxCircleLine />
-                            </button>
-                        </div>
+                        <button className={`auto-pilot-toggle ${autoPilot ? 'active' : ''}`} onClick={() => setAutoPilot(!autoPilot)}>
+                            <RiRadarLine className={autoPilot ? 'blink' : ''} />
+                            <span>{autoPilot ? 'AUTO-PILOT ACTIVE' : 'ENGAGE NEURAL AUTO-PILOT'}</span>
+                        </button>
                     </div>
                 </div>
 
-                {/* RIGHT: MONITOR & LOGS */}
-                <div className="oracle-monitor">
-                    <div className="glass-card" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
-                        <h4 className="orbitron" style={{ fontSize: '0.8rem', opacity: 0.4, marginBottom: '2rem' }}>ACTUATION MONITOR</h4>
+                {/* RIGHT: LIVE TELEMETRY & FEEDBACK */}
+                <div className="monitor-side">
+                    <div className="sahara-glass" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                        <div className="telemetry-orb">
+                            <div className="orb-active" />
+                            <div style={{ textAlign: 'center', z- index: 10 }}>
+                            <div className="stat-value" style={{ fontSize: '3.5rem', color: telemetry.ph > selectedVariety.ph + 0.2 ? '#ef4444' : 'var(--oasis-teal)' }}>{telemetry.ph.toFixed(2)}</div>
+                            <div className="stat-label">LIVE FEEDBACK PH</div>
+                        </div>
+                    </div>
 
-                        <div className="relay-mon">
-                            {[
-                                { r: 1, n: 'PH DOWN', p: 'GPIO 4' },
-                                { r: 2, n: 'SOL A', p: 'GPIO 5' },
-                                { r: 3, n: 'SOL B', p: 'GPIO 6' }
-                            ].map(relay => (
-                                <div key={relay.r} className={`relay-card ${activeRelay === relay.r ? 'active' : ''}`}>
-                                    <RiFlaskLine size={24} style={{ opacity: 0.3 }} />
-                                    <div style={{ fontWeight: 900, fontSize: '0.7rem', marginTop: '10px' }}>{relay.n}</div>
-                                    <div style={{ fontSize: '0.5rem', opacity: 0.4 }}>{relay.p}</div>
-                                </div>
+                    <div className="stat-grid" style={{ marginTop: '0' }}>
+                        <div className="stat-card">
+                            <div className="stat-label">LIVE EC</div>
+                            <div className="stat-value" style={{ fontSize: '1.5rem', color: 'var(--oasis-teal)' }}>{telemetry.ec.toFixed(2)}</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-label">UPLINK STRENGTH</div>
+                            <div className="stat-value" style={{ fontSize: '1.5rem' }}>{telemetry.rssi} dBm</div>
+                        </div>
+                    </div>
+
+                    <div className="mission-logs" style={{ flex: 1, marginTop: '2.5rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1.5rem', opacity: 0.5 }}>
+                            <RiHistoryLine />
+                            <span className="orbitron" style={{ fontSize: '0.65rem' }}>NEURAL STATE LOG</span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {logs.map((l, i) => (
+                                <div key={i} style={{ fontSize: '0.7rem', padding: '12px', background: 'rgba(255,255,255,0.02)', borderRadius: '12px', borderLeft: '3px solid var(--sahara-dusk)' }}>{l}</div>
                             ))}
-                        </div>
-
-                        <div className="logs-panel" style={{ flex: 1, marginTop: '2rem' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1rem' }}>
-                                <RiHistoryLine className="icon-purple" />
-                                <span className="orbitron" style={{ fontSize: '0.6rem', fontWeight: 900 }}>MISSION LOG</span>
-                            </div>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                                {logs.map((l, i) => (
-                                    <div key={i} style={{ fontSize: '0.7rem', fontFamily: 'monospace', padding: '10px', background: 'rgba(0,0,0,0.02)', borderRadius: '8px', borderLeft: '3px solid var(--secondary)' }}>{l}</div>
-                                ))}
-                                {logs.length === 0 && <div className="text-dim" style={{ fontStyle: 'italic', fontSize: '0.7rem' }}>Awaiting neural analysis...</div>}
-                            </div>
+                            {logs.length === 0 && <div style={{ fontSize: '0.7rem', opacity: 0.3, fontStyle: 'italic' }}>Awaiting uplink sync...</div>}
                         </div>
                     </div>
                 </div>
-            </main>
-
-            {/* MISSION PLAN POPUP */}
-            {missionPlan && (
-                <div className="mission-plan-overlay animate-fade">
-                    <div className="plan-card animate-scale-up">
-                        <header className="plan-header">
-                            <h3 className="orbitron" style={{ color: 'black' }}>MISSION PREVIEW</h3>
-                            <p style={{ fontSize: '0.7rem', fontWeight: 700, color: '#888' }}>REASONING IDENTIFIED {missionPlan.length} ACTUATION STEPS</p>
-                        </header>
-
-                        <div className="plan-steps">
-                            {missionPlan.map((step, i) => (
-                                <div key={i} className="plan-step">
-                                    <div className="step-icon">
-                                        {step.icon}
-                                    </div>
-                                    <div className="step-info">
-                                        <div className="step-title">{step.name}</div>
-                                        <div className="step-dur" style={{ color: '#555' }}>{step.reason} • {(step.duration / 1000).toFixed(2)}s PULSE</div>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-
-                        <footer style={{ marginTop: '2rem', display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '10px' }}>
-                            <button className="btn-primary" style={{ background: '#eee', color: '#000' }} onClick={() => setMissionPlan(null)}>
-                                <RiCloseCircleLine /> CANCEL
-                            </button>
-                            <button className="btn-primary" style={{ background: 'var(--secondary)' }} onClick={runMission}>
-                                <RiCheckboxCircleLine /> CONFIRM & ACTUATE
-                            </button>
-                        </footer>
-                    </div>
-                </div>
-            )}
         </div>
+            </main >
+
+    {/* E-STOP BUTTON */ }
+    < div className = "estop-btn" onClick = { runEStop } title = "EMERGENCY STOP" >
+        <RiAlertLine />
+            </div >
+
+    {/* MISSION PLAN POPUP */ }
+{
+    missionPlan && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', backdropFilter: 'blur(10px)', display: 'flex', alignItems: 'center', justify- content: 'center', zIndex: 2000, padding: '2rem'
+}}>
+    <div className="sahara-glass" style={{ maxWidth: '500px', width: '100%', background: '#111' }}>
+        <h3 className="orbitron" style={{ marginBottom: '1.5rem', borderBottom: '1px solid #333', paddingBottom: '1rem' }}>MISSION PREVIEW</h3>
+        {missionPlan.map((step, i) => (
+            <div key={i} style={{ display: 'flex', gap: '15px', padding: '15px', background: '#222', borderRadius: '15px', marginBottom: '10px' }}>
+                <div style={{ color: 'var(--sahara-sand)' }}>{step.icon}</div>
+                <div>
+                    <div style={{ fontWeight: 800, fontSize: '0.8rem' }}>{step.name}</div>
+                    <div style={{ fontSize: '0.65rem', opacity: 0.5 }}>{step.reason} • {(step.duration / 1000).toFixed(2)}s</div>
+                </div>
+            </div>
+        ))}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: '15px', marginTop: '2rem' }}>
+            <button className="auto-pilot-toggle" style={{ background: '#333' }} onClick={() => setMissionPlan(null)}>CANCEL</button>
+            <button className="auto-pilot-toggle" style={{ background: 'var(--sahara-dusk)' }} onClick={() => runMission()}>CONFIRM MISSION</button>
+        </div>
+    </div>
+                </div >
+            )}
+
+{
+    !autoPilot && !missionPlan && (
+        <button
+            className="auto-pilot-toggle"
+            style={{ position: 'fixed', bottom: '130px', right: '40px', width: 'auto', padding: '1rem 2rem', zIndex: 100 }}
+            onClick={() => planMission()}
+        >
+            <RiPlayCircleLine /> MANUAL MISSION
+        </button>
+    )
+}
+        </div >
     );
 };
 
