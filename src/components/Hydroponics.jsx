@@ -71,6 +71,11 @@ const Hydroponics = () => {
     const [isOnline, setIsOnline] = useState(false);
     const [isCloudLinked, setIsCloudLinked] = useState(false);
 
+    // ACTUATION CONFIG (Calibration)
+    const [phFactor, setPhFactor] = useState(1500); // ms per 0.1 PH delta
+    const [ecFactor, setEcFactor] = useState(2000); // ms per 0.1 EC delta
+    const [maxPulse, setMaxPulse] = useState(8000); // max duration safety cap (ms)
+
     // ACTUATION STATE
     const [isDosing, setIsDosing] = useState(false);
     const [activeRelay, setActiveRelay] = useState(null);
@@ -115,29 +120,33 @@ const Hydroponics = () => {
             // 1. PH BALANCE (Relay 1)
             if (currentPH > selectedSubtype.ph) {
                 const phDelta = currentPH - selectedSubtype.ph;
-                const phPulse = Math.min(Math.round(phDelta * 1000 * 1.5), 5000);
-                addLog(`DECISION: High PH (+${phDelta.toFixed(2)}). Actuating PH Down for ${phPulse}ms`);
+                // Calculate pulse based on user calibration (scaled per 0.1 delta)
+                const calculatedPulse = Math.round((phDelta / 0.1) * phFactor);
+                const finalPulse = Math.min(calculatedPulse, maxPulse);
+
+                addLog(`DECISION: High PH (+${phDelta.toFixed(2)}). Actuating PH Down for ${finalPulse}ms`);
                 setActiveRelay(1);
-                await IoTProxy.actuate(targetId, 1, 'ON', phPulse);
-                await new Promise(r => setTimeout(r, 1000 + phPulse));
+                await IoTProxy.actuate(targetId, 1, 'ON', finalPulse);
+                await new Promise(r => setTimeout(r, 1000 + finalPulse));
                 setActiveRelay(null);
             }
 
             // 2. NUTRIENT BALANCE (Relay 2 & 3)
             if (currentEC < selectedSubtype.ec) {
                 const ecDelta = selectedSubtype.ec - currentEC;
-                const nutrPulse = Math.min(Math.round(ecDelta * 1000 * 2), selectedSubtype.doseA);
+                const calculatedPulse = Math.round((ecDelta / 0.1) * ecFactor);
+                const finalPulse = Math.min(calculatedPulse, maxPulse);
 
-                addLog(`DECISION: Low EC identified (-${ecDelta.toFixed(2)}). Dosing A/B mix for ${nutrPulse}ms`);
+                addLog(`DECISION: Low EC identified (-${ecDelta.toFixed(2)}). Dosing A/B mix for ${finalPulse}ms`);
 
                 setActiveRelay(2);
-                await IoTProxy.actuate(targetId, 2, 'ON', nutrPulse);
-                await new Promise(r => setTimeout(r, 1000 + nutrPulse));
+                await IoTProxy.actuate(targetId, 2, 'ON', finalPulse);
+                await new Promise(r => setTimeout(r, 1000 + finalPulse));
                 setActiveRelay(null);
 
                 setActiveRelay(3);
-                await IoTProxy.actuate(targetId, 3, 'ON', nutrPulse);
-                await new Promise(r => setTimeout(r, 1000 + nutrPulse));
+                await IoTProxy.actuate(targetId, 3, 'ON', finalPulse);
+                await new Promise(r => setTimeout(r, 1000 + finalPulse));
                 setActiveRelay(null);
             }
 
@@ -289,6 +298,39 @@ const Hydroponics = () => {
                         </div>
                     </section>
 
+                    <section className="hardware-tuning glass-panel">
+                        <div className="card-header">
+                            <RiSettings3Line size={20} className="icon-purple" />
+                            <h4>HARDWARE TUNING</h4>
+                        </div>
+                        <div className="calibration-grid">
+                            <div className="tune-field">
+                                <label>PH PULSE RATE (ms / 0.1 Δ)</label>
+                                <input
+                                    type="number"
+                                    value={phFactor}
+                                    onChange={e => setPhFactor(parseInt(e.target.value))}
+                                />
+                            </div>
+                            <div className="tune-field">
+                                <label>NUTRIENT RATE (ms / 0.1 Δ)</label>
+                                <input
+                                    type="number"
+                                    value={ecFactor}
+                                    onChange={e => setEcFactor(parseInt(e.target.value))}
+                                />
+                            </div>
+                            <div className="tune-field full">
+                                <label>GLOBAL SAFETY CAP (MAX MS)</label>
+                                <input
+                                    type="number"
+                                    value={maxPulse}
+                                    onChange={e => setMaxPulse(parseInt(e.target.value))}
+                                />
+                            </div>
+                        </div>
+                    </section>
+
                     <section className="ai-logic-log glass-panel">
                         <div className="log-container">
                             <div className="log-header">
@@ -373,7 +415,15 @@ const Hydroponics = () => {
                 .config-field label { font-size: 0.55rem; font-weight: 900; margin-bottom: 3px; display: block; }
                 .config-field input { width: 100%; padding: 6px; border-radius: 4px; border: 1px solid #ddd; font-size: 0.7rem; font-weight: 700; color: var(--primary); }
 
-                .log-container { display: flex; flex-direction: column; height: 100%; min-height: 200px; }
+                .calibration-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+                .tune-field.full { grid-column: span 2; }
+                .tune-field label { font-size: 0.55rem; font-weight: 900; opacity: 0.6; display: block; margin-bottom: 5px; }
+                .tune-field input { 
+                    width: 100%; background: rgba(0,0,0,0.05); border: 1px solid #ddd; border-radius: 6px; padding: 8px;
+                    font-family: 'Orbitron', sans-serif; font-size: 0.8rem; color: var(--primary); font-weight: 700;
+                }
+
+                .log-container { display: flex; flex-direction: column; height: 100%; min-height: 120px; }
                 .log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; font-size: 0.7rem; font-weight: 900; opacity: 0.6; }
                 .log-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
                 .log-row { font-family: monospace; font-size: 0.7rem; padding: 8px; background: rgba(0,0,0,0.02); border-radius: 4px; border-left: 2px solid #ccc; }
