@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
     RiFlaskLine,
     RiPulseLine,
@@ -8,7 +8,8 @@ import {
     RiAlertLine,
     RiTimerFlashLine,
     RiWifiLine,
-    RiSettings3Line
+    RiSettings3Line,
+    RiPlayLine
 } from 'react-icons/ri';
 import { useI18n } from '../context/i18nContext';
 import { usePlatform } from '../context/PlatformContext';
@@ -38,25 +39,30 @@ const Hydroponics = () => {
     const [lastActivity, setLastActivity] = useState(Date.now());
     const [signalDecay, setSignalDecay] = useState(0);
 
+    // LATEST STATE REFS (For Autopilot Interval)
+    const telemetryRef = useRef({ ph: 7.0, ec: 1.0 });
+    const varietyRef = useRef(MASTER_VAULT["ALGERIAN HERITAGE"][0]);
+
     const updateNodeId = (id) => {
         setNodeIdState(id);
         localStorage.setItem('agro_node_id', id);
         setIsIdEditing(false);
-        window.location.reload(); // Force full reconnect
+        window.location.reload();
     };
 
     // VARIETAL STATE
-    const [searchTerm, setSearchTerm] = useState('');
     const [selectedVariety, setSelectedVarietyState] = useState(MASTER_VAULT["ALGERIAN HERITAGE"][0]);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
 
     const setSelectedVariety = (v) => {
         setSelectedVarietyState(v);
+        varietyRef.current = v;
         setActiveVariety(v);
     };
 
     useEffect(() => {
         setActiveVariety(selectedVariety);
+        varietyRef.current = selectedVariety;
     }, []);
 
     // TELEMETRY
@@ -73,9 +79,7 @@ const Hydroponics = () => {
 
     // IOT CONNECTION
     useEffect(() => {
-        console.log(`[Hydroponics] Registering node: ${nodeId}`);
         IoTProxy.connect(nodeId, (status) => {
-            console.log(`[Hydroponics] Link Status Sync: ${status ? 'UP' : 'DOWN'}`);
             setIsCloudLinked(status);
             if (status) setLastActivity(Date.now());
         });
@@ -86,6 +90,7 @@ const Hydroponics = () => {
                 try {
                     const data = JSON.parse(message.toString());
                     setTelemetry(data);
+                    telemetryRef.current = data;
                     setLastActivity(Date.now());
                 } catch (e) { }
             }
@@ -113,9 +118,11 @@ const Hydroponics = () => {
 
     const planMission = (silent = false) => {
         if (emergencyStatus) return;
+        const curTel = telemetryRef.current;
+        const curVar = varietyRef.current;
         const plan = [];
-        const phDelta = telemetry.ph - selectedVariety.ph;
-        const ecDelta = selectedVariety.ec - telemetry.ec;
+        const phDelta = curTel.ph - curVar.ph;
+        const ecDelta = curVar.ec - curTel.ec;
 
         if (phDelta > 0.05) plan.push({ relay: 1, name: 'PH DOWN', duration: Math.min(Math.round(phDelta * 10 * 375), 5000), icon: <RiFlaskLine />, reason: `PH DRIFT (+${phDelta.toFixed(2)})` });
         if (ecDelta > 0.05) {
@@ -123,10 +130,12 @@ const Hydroponics = () => {
             plan.push({ relay: 2, name: 'NUTRIENT A', duration: dur, icon: <RiPulseLine />, reason: `EC DEFICIT (-${ecDelta.toFixed(2)})` });
             plan.push({ relay: 3, name: 'NUTRIENT B', duration: dur, icon: <RiPulseLine />, reason: `EC DEFICIT (-${ecDelta.toFixed(2)})` });
         }
+
         if (plan.length > 0) {
             if (silent) return plan;
             setMissionPlan(plan);
         }
+        return null;
     };
 
     const runMission = async (p = missionPlan) => {
@@ -135,7 +144,7 @@ const Hydroponics = () => {
         setIsMissionActive(true);
         setMissionPlan(null);
         try {
-            console.log("[Hydroponics] MISSION PULSE START", p);
+            console.log("[Hydroponics] AUTOPILOT PULSE TRIGGERED", p);
             for (const step of p) {
                 if (emergencyStatus) break;
                 setActiveMission({ ...step, remaining: step.duration });
@@ -150,7 +159,7 @@ const Hydroponics = () => {
                 clearInterval(timer);
                 setActiveMission(null);
                 setCompletedMissions(prev => [`[${new Date().toLocaleTimeString()}] ${step.name} | ${step.duration}ms`, ...prev.slice(0, 5)]);
-                await new Promise(r => setTimeout(r, 2000));
+                await new Promise(r => setTimeout(r, 1500));
             }
         } finally {
             setIsDosing(false);
@@ -164,8 +173,27 @@ const Hydroponics = () => {
             { relay: 2, name: 'TEST: NUTRIENT A', duration: 2000, icon: <RiPulseLine />, reason: 'MANUAL DIAGNOSTIC' },
             { relay: 3, name: 'TEST: NUTRIENT B', duration: 2000, icon: <RiPulseLine />, reason: 'MANUAL DIAGNOSTIC' }
         ];
-        setMissionPlan(testPlan);
+        runMission(testPlan);
     };
+
+    // AUTOPILOT LOOP (Decoupled from Telemetry resets)
+    useEffect(() => {
+        if (!autoPilot) return;
+
+        console.log("[Hydroponics] AUTOPILOT ENGINE ENGAGED");
+        const id = setInterval(() => {
+            if (isDosing || emergencyStatus) return;
+            const plan = planMission(true);
+            if (plan && plan.length > 0) {
+                runMission(plan);
+            }
+        }, 10000); // Check every 10s
+
+        return () => {
+            console.log("[Hydroponics] AUTOPILOT ENGINE DISENGAGED");
+            clearInterval(id);
+        };
+    }, [autoPilot, isDosing, emergencyStatus]);
 
     const runEStop = () => {
         setEmergencyStatus(true); setAutoPilot(false);
@@ -174,15 +202,6 @@ const Hydroponics = () => {
         setCompletedMissions(p => [`!!! STOP COMMAND BROADCAST !!!`, ...p]);
         setTimeout(() => setEmergencyStatus(false), 5000);
     };
-
-    useEffect(() => {
-        if (!autoPilot || isDosing || emergencyStatus) return;
-        const id = setInterval(() => {
-            const plan = planMission(true);
-            if (plan?.length > 0) runMission(plan);
-        }, 30000);
-        return () => clearInterval(id);
-    }, [autoPilot, isDosing, telemetry, selectedVariety, emergencyStatus]);
 
     return (
         <div className="hydro-sync animate-fade" style={{ paddingBottom: '100px' }}>
@@ -198,7 +217,7 @@ const Hydroponics = () => {
                 .control-btn { width: 100%; margin-top: 1rem; padding: 1rem; border-radius: 12px; border: none; font-family: var(--font-header); cursor: pointer; font-weight: 800; transition: 0.3s; background: var(--primary); color: var(--bg-deep); }
                 .control-btn.active { background: var(--secondary); box-shadow: 0 0 20px rgba(153, 173, 122, 0.4); }
                 .orb-container { height: 180px; display: flex; align-items: center; justify-content: center; position: relative; }
-                .orb-core { font-family: var(--font-header); font-size: 3.5rem; font-weight: 900; color: var(--primary); z-index: 2; }
+                .orb-core { font-family: var(--font-header); font-size: 3.5rem; font-weight: 900; color: var(--primary); z-index: 2; transition: 0.5s; }
                 .orb-pulse { position: absolute; width: 130px; height: 130px; border-radius: 50%; border: 2px solid var(--primary); opacity: 0.1; animation: grow 3s infinite; }
                 @keyframes grow { from { transform: scale(0.8); opacity: 0.2; } to { transform: scale(1.4); opacity: 0; } }
                 .estop-global { position: fixed; bottom: 30px; right: 30px; width: 70px; height: 70px; border-radius: 50%; background: #ef4444; color: white; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; cursor: pointer; box-shadow: 0 10px 30px rgba(239, 68, 68, 0.4); z-index: 1000; border: 5px solid rgba(255,255,255,0.2); }
@@ -223,13 +242,10 @@ const Hydroponics = () => {
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                 <RiWifiLine color={isCloudLinked ? 'var(--primary)' : '#ef4444'} />
                                 <span style={{ fontSize: '0.65rem', fontWeight: 800, color: isCloudLinked ? 'var(--primary)' : '#ef4444' }}>{isCloudLinked ? 'CONNECTED' : 'OFFLINE'}</span>
-                                {signalDecay > 10 && <span className="animate-pulse" style={{ fontSize: '0.6rem', color: '#ef4444', fontWeight: 900 }}>! SIGNAL DECAY: {signalDecay}s</span>}
+                                {signalDecay > 8 && <span className="animate-pulse" style={{ fontSize: '0.6rem', color: '#ef4444', fontWeight: 900 }}>! SIGNAL DECAY: {signalDecay}s</span>}
                             </div>
                         </div>
                     </div>
-                    {!isCloudLinked && (
-                        <button className="glass-panel" onClick={() => window.location.reload()} style={{ padding: '8px 15px', color: 'var(--primary)', border: '1px solid var(--primary)', background: 'none', fontSize: '0.6rem', fontWeight: 800, cursor: 'pointer' }}>RE-ESTABLISH LINK</button>
-                    )}
                 </div>
             </header>
 
@@ -271,6 +287,7 @@ const Hydroponics = () => {
                         </div>
                         <button className={`control-btn ${autoPilot ? 'active' : ''}`} onClick={() => setAutoPilot(!autoPilot)}>
                             {autoPilot ? 'AUTO-PILOT ACTIVE' : 'ENGAGE AUTO-PILOT'}
+                            {autoPilot && <div style={{ fontSize: '0.5rem', opacity: 0.8, marginTop: '4px' }}>MONITORING STACK EVERY 10s</div>}
                         </button>
                     </div>
                 </section>
@@ -279,12 +296,12 @@ const Hydroponics = () => {
                     <div className="glass-panel" style={{ padding: 'var(--spacing-lg)', height: '100%', display: 'flex', flexDirection: 'column' }}>
                         <div className="orb-container">
                             <div className="orb-pulse" />
-                            <div className="orb-core" style={{ color: signalDecay > 15 ? 'var(--text-dim)' : 'var(--primary)' }}>{telemetry.ph.toFixed(2)}</div>
+                            <div className="orb-core" style={{ color: signalDecay > 10 ? '#888' : 'var(--primary)' }}>{telemetry.ph.toFixed(2)}</div>
                         </div>
                         <div className="stat-grid" style={{ marginBottom: '1.5rem' }}>
                             <div className="stat-unit">
                                 <div className="stat-label">RESERVOIR EC</div>
-                                <div style={{ fontSize: '1.2rem', fontWeight: 800, color: 'var(--primary)' }}>{telemetry.ec.toFixed(2)}</div>
+                                <div style={{ fontSize: '1.2rem', fontWeight: 800, color: signalDecay > 10 ? '#888' : 'var(--primary)' }}>{telemetry.ec.toFixed(2)}</div>
                             </div>
                             <div className="stat-unit">
                                 <div className="stat-label">UPLINK</div>
@@ -353,8 +370,8 @@ const Hydroponics = () => {
             )}
 
             {!autoPilot && !missionPlan && (
-                <button className="control-btn" style={{ position: 'fixed', bottom: '110px', right: '30px', width: 'auto', padding: '0.8rem 1.8rem', zIndex: 100, fontSize: '0.65rem' }} onClick={() => planMission()}>
-                    <RiPlayCircleLine size="1.1rem" /> MANUAL MISSION
+                <button className="control-btn" style={{ position: 'fixed', bottom: '110px', right: '30px', width: 'auto', padding: '0.8rem 1.8rem', zIndex: 100, fontSize: '0.65rem', display: 'flex', alignItems: 'center', gap: '10px' }} onClick={() => planMission()}>
+                    <RiPlayLine size="1.1rem" /> MANUAL MISSION
                 </button>
             )}
         </div>
