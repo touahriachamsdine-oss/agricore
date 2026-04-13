@@ -209,6 +209,14 @@ const Hydroponics = () => {
         addLog(`SYSTEM: Relay Polarity set to ${nextState ? 'ACTIVE-HIGH' : 'ACTIVE-LOW'}`);
     };
 
+    const manualToggleRelay = async (relay, currentState) => {
+        const targetId = isCloudLinked ? nodeId : esp32Ip;
+        const newState = currentState === 'ON' ? 'OFF' : 'ON';
+        addLog(`ACTION: Manually toggling Pump ${relay} to ${newState}`);
+        setActiveRelay(newState === 'ON' ? relay : null);
+        await IoTProxy.actuate(targetId, relay, newState, 0);
+    };
+
     return (
         <div className="hydro-module animate-fade">
             <header className="hydro-header">
@@ -423,6 +431,21 @@ const Hydroponics = () => {
                                         </button>
                                     </div>
                                 </div>
+
+                                <div className="prime-controls">
+                                    <label className="prime-label">HARDWARE PRIME (LATCHING)</label>
+                                    <div className="prime-grid">
+                                        {[1, 2, 3].map(id => (
+                                            <button
+                                                key={id}
+                                                className={`prime-btn ${activeRelay === id ? 'active' : ''}`}
+                                                onClick={() => manualToggleRelay(id, activeRelay === id ? 'OFF' : 'ON')}
+                                            >
+                                                {activeRelay === id ? 'PUMP ACTIVE' : `PRIME R${id}`}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
                             </section>
                         </div>
                     )}
@@ -554,6 +577,25 @@ const Hydroponics = () => {
                     font-size: 0.6rem; font-weight: 800; cursor: pointer;
                 }
                 .toggle-pill.active { background: var(--primary); color: white; border-color: var(--primary); }
+
+                .prime-controls { margin-top: 1.5rem; border-top: 1px solid rgba(0,0,0,0.05); padding-top: 1rem; }
+                .prime-label { font-size: 0.55rem; font-weight: 900; opacity: 0.6; display: block; margin-bottom: 10px; }
+                .prime-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+                .prime-btn { 
+                    padding: 10px 5px; border-radius: 6px; border: 1px solid #ddd; background: white; 
+                    font-size: 0.55rem; font-weight: 900; cursor: pointer; transition: all 0.2s;
+                }
+                .prime-btn.active { 
+                    background: var(--secondary); color: white; border-color: var(--secondary); 
+                    animation: glow-pulse 1.5s infinite; 
+                }
+
+                @keyframes glow-pulse {
+                    0% { box-shadow: 0 0 0 0 rgba(153, 173, 122, 0.4); }
+                    70% { box-shadow: 0 0 0 10px rgba(153, 173, 122, 0); }
+                    100% { box-shadow: 0 0 0 0 rgba(153, 173, 122, 0); }
+                }
+
                 .log-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
                 .log-row { font-family: monospace; font-size: 0.7rem; padding: 8px; background: rgba(0,0,0,0.02); border-radius: 4px; border-left: 2px solid #ccc; }
                 .log-row.highlight { background: rgba(153, 173, 122, 0.05); border-left-color: var(--secondary); }

@@ -15,8 +15,8 @@
 // ---------------------------------------------------------
 // NEURAL IDENTITY & NETWORK
 // ---------------------------------------------------------
-const char* ssid = "YOUR_WIFI_SSID";
-const char* password = "YOUR_WIFI_PASSWORD";
+const char* ssid = "HOTEL EL EMIR";
+const char* password = "1234567890";
 const char* agroId = "AGRO_NODE_01"; // UNIQUE CHANNEL ID
 
 // ---------------------------------------------------------
@@ -42,7 +42,7 @@ CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000};
 // HARDWARE STRATEGY
 // ---------------------------------------------------------
 #define PUMP_CHANNELS 3
-const int pumps[PUMP_CHANNELS] = {4, 5, 6}; // R1, R2, R3
+const int pumps[PUMP_CHANNELS] = {4, 5, 2}; // R1, R2, R3
 unsigned long pumpOffAt[PUMP_CHANNELS] = {0, 0, 0};
 bool activeLowLogic = true; // Set to false for Active-High relays
 
@@ -125,11 +125,14 @@ void setup() {
   });
   
   // Also keep HTTP actuate for local dev stability
-  server.on("/actuate", HTTP_POST, [](){
-    if (server.hasArg("plain")) {
-        deserializeJson(jsonDoc, server.arg("plain"));
-        executePulse(jsonDoc["relay"], jsonDoc["duration"]);
-        server.send(200, "application/json", "{\"status\":\"ok\"}");
+  server.on("/actuate", HTTP_POST, []() {
+    String message = server.arg("plain");
+    DeserializationError error = deserializeJson(jsonDoc, message);
+    if (!error) {
+      executePulse(jsonDoc["relay"].as<int>() - 1, jsonDoc["command"], jsonDoc["duration"]);
+      server.send(200, "application/json", "{\"status\":\"NEURAL_ACK\"}");
+    } else {
+      server.send(400, "text/plain", "Payload Garbled");
     }
   });
   
