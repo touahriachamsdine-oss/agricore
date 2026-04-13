@@ -1,23 +1,24 @@
 /**
  * AGROCORE — THE NEURAL FIELD FABRIC
- * ESP32 Hydroponic Controller v2.0
+ * ESP32 Hydroponic Controller v3.0 (Robust Edition)
  * 
- * New in v2.0:
- * - Local Profile Storage (Hardware Fallback)
- * - Enhanced Neural Monitoring
+ * Reworked for absolute hardware stability and explicit pin addressing.
+ * - Explicit #define GPIOs
+ * - Switch-case logic for command routing
+ * - Failsafe Emergency Halt
  */
 
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ArduinoJson.h>
-#include <PubSubClient.h> // PLEASE INSTALL THIS LIBRARY IN ARDUINO IDE
+#include <PubSubClient.h>
 
 // ---------------------------------------------------------
 // NEURAL IDENTITY & NETWORK
 // ---------------------------------------------------------
-const char* ssid = "HOTEL EL EMIR";
-const char* password = "1234567890";
-const char* agroId = "AGRO_NODE_01"; // UNIQUE CHANNEL ID
+const char* ssid = "YOUR_WIFI_SSID";
+const char* password = "YOUR_WIFI_PASSWORD";
+const char* agroId = "AGRO_NODE_01"; 
 
 // ---------------------------------------------------------
 // CLOUD RELAY SETTINGS (HiveMQ)
@@ -27,62 +28,71 @@ const int mqttPort = 1883;
 const String actuationTopic = "agrocore/actuate/" + String(agroId);
 
 // ---------------------------------------------------------
-// LOCAL CROP KNOWLEDGE (Hardware Fallback)
+// EXPLICIT HARDWARE DEFINITIONS (THE NORMAL WAY)
 // ---------------------------------------------------------
-struct CropProfile {
-  char name[20];
-  float targetPH;
-  float targetEC;
-  int doseDuration;
-};
+#define PUMP_PH 4   // Relay 1
+#define PUMP_NA 5   // Relay 2
+#define PUMP_NB 6   // Relay 3
 
-CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000}; 
-
-// ---------------------------------------------------------
-// HARDWARE STRATEGY
-// ---------------------------------------------------------
-#define PUMP_CHANNELS 3
-const int pumps[PUMP_CHANNELS] = {4, 5, 6}; // R1, R2, R3
-unsigned long pumpOffAt[PUMP_CHANNELS] = {0, 0, 0};
-bool activeLowLogic = true; // Set to false for Active-High relays
+// TIMING ENGINE (Independent Failsafes)
+unsigned long phOffAt = 0;
+unsigned long naOffAt = 0;
+unsigned long nbOffAt = 0;
+bool activeLow = true; // DEFAULT: LOW=ON, HIGH=OFF
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 WebServer server(80);
-StaticJsonDocument<256> jsonDoc;
+StaticJsonDocument<512> jsonDoc;
 
-void executePulse(int ch, String command, int duration) {
-  if(ch < 0 || ch >= PUMP_CHANNELS) return;
-  
-  if(command == "ON") {
-    // Determine physical level based on relay logic
-    int onLevel = activeLowLogic ? LOW : HIGH;
-    digitalWrite(pumps[ch], onLevel);
+// ---------------------------------------------------------
+// ROBUST ACTUATION ENGINE
+// ---------------------------------------------------------
+void physicalDrive(int pin, String state) {
+  int level;
+  if (state == "ON") level = activeLow ? LOW : HIGH;
+  else level = activeLow ? HIGH : LOW;
+  digitalWrite(pin, level);
+}
+
+void executeNeuralCommand(int relay, String command, int duration) {
+  Serial.print("NEURAL COMMAND: R"); Serial.print(relay);
+  Serial.print(" "); Serial.print(command);
+  if(duration > 0) { Serial.print(" for "); Serial.print(duration); Serial.println("ms"); }
+  else Serial.println(" (LATCHING)");
+
+  if (command == "STOP_ALL") {
+    physicalDrive(PUMP_PH, "OFF"); phOffAt = 0;
+    physicalDrive(PUMP_NA, "OFF"); naOffAt = 0;
+    physicalDrive(PUMP_NB, "OFF"); nbOffAt = 0;
+    Serial.println(">>> FULL SYSTEM HALT <<<");
+    return;
+  }
+
+  if (command == "LOGIC_HIGH") { activeLow = false; Serial.println("POLARITY: ACTIVE-HIGH"); return; }
+  if (command == "LOGIC_LOW")  { activeLow = true; Serial.println("POLARITY: ACTIVE-LOW"); return; }
+
+  // Explicit Pin Routing
+  int targetPin = 0;
+  if(relay == 1) targetPin = PUMP_PH;
+  else if(relay == 2) targetPin = PUMP_NA;
+  else if(relay == 3) targetPin = PUMP_NB;
+
+  if(targetPin == 0) return;
+
+  if (command == "ON") {
+    physicalDrive(targetPin, "ON");
     if(duration > 0) {
-      pumpOffAt[ch] = millis() + duration;
+      unsigned long expire = millis() + duration;
+      if(relay == 1) phOffAt = expire;
+      else if(relay == 2) naOffAt = expire;
+      else if(relay == 3) nbOffAt = expire;
     }
-    Serial.print("NEURAL LINK: Channel "); Serial.print(ch+1); Serial.println(" ACTIVE.");
-  } 
-  else if(command == "OFF") {
-    int offLevel = activeLowLogic ? HIGH : LOW;
-    digitalWrite(pumps[ch], offLevel);
-    pumpOffAt[ch] = 0;
-    Serial.print("NEURAL LINK: Channel "); Serial.print(ch+1); Serial.println(" IDLE.");
-  }
-  else if(command == "STOP_ALL") {
-    for(int i=0; i<PUMP_CHANNELS; i++) {
-        digitalWrite(pumps[i], activeLowLogic ? HIGH : LOW);
-        pumpOffAt[i] = 0;
-    }
-    Serial.println("NEURAL LINK: EMERGENCY HALT EXECUTED.");
-  }
-  else if(command == "LOGIC_HIGH") {
-    activeLowLogic = false;
-    Serial.println("NEURAL LINK: Polarity set to ACTIVE-HIGH.");
-  }
-  else if(command == "LOGIC_LOW") {
-    activeLowLogic = true;
-    Serial.println("NEURAL LINK: Polarity set to ACTIVE-LOW.");
+  } else {
+    physicalDrive(targetPin, "OFF");
+    if(relay == 1) phOffAt = 0;
+    else if(relay == 2) naOffAt = 0;
+    else if(relay == 3) nbOffAt = 0;
   }
 }
 
@@ -91,48 +101,41 @@ void onNeuralImpulse(char* topic, byte* payload, unsigned int length) {
   String message = "";
   for (int i = 0; i < length; i++) message += (char)payload[i];
   
-  Serial.println("CLOUD-LINK IMPULSE: " + message);
-  
-  DeserializationError error = deserializeJson(jsonDoc, message);
-  if (!error) {
-    executePulse(jsonDoc["relay"].as<int>() - 1, jsonDoc["command"], jsonDoc["duration"]);
+  StaticJsonDocument<256> mqttDoc;
+  if (!deserializeJson(mqttDoc, message)) {
+    executeNeuralCommand(mqttDoc["relay"], mqttDoc["command"], mqttDoc["duration"]);
   }
 }
 
 void setup() {
   Serial.begin(115200);
   
-  for(int i=0; i<PUMP_CHANNELS; i++) {
-    pinMode(pumps[i], OUTPUT);
-    digitalWrite(pumps[i], activeLowLogic ? HIGH : LOW);
-  }
+  pinMode(PUMP_PH, OUTPUT);
+  pinMode(PUMP_NA, OUTPUT);
+  pinMode(PUMP_NB, OUTPUT);
+
+  // FORCE INITIAL IDLE STATE
+  physicalDrive(PUMP_PH, "OFF");
+  physicalDrive(PUMP_NA, "OFF");
+  physicalDrive(PUMP_NB, "OFF");
 
   WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nAGROCORE NODE ONLINE");
-  Serial.printf("LOCAL IP: %s\n", WiFi.localIP().toString().c_str());
-  Serial.printf("CLOUD PAIRING ID: %s\n", agroId);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+  Serial.println("\nNEURAL NODE READY.");
+  Serial.printf("IP: %s | ID: %s\n", WiFi.localIP().toString().c_str(), agroId);
 
-  // Configure MQTT
   mqttClient.setServer(mqttServer, mqttPort);
   mqttClient.setCallback(onNeuralImpulse);
 
-  server.on("/status", HTTP_GET, [](){
-    server.send(200, "application/json", "{\"node\":\"" + String(agroId) + "\",\"mode\":\"HYBRID\"}");
-  });
-  
-  // Also keep HTTP actuate for local dev stability
+  server.on("/status", HTTP_GET, [](){ server.send(200, "text/plain", "ONLINE"); });
   server.on("/actuate", HTTP_POST, []() {
     String message = server.arg("plain");
-    DeserializationError error = deserializeJson(jsonDoc, message);
-    if (!error) {
-      executePulse(jsonDoc["relay"].as<int>() - 1, jsonDoc["command"], jsonDoc["duration"]);
-      server.send(200, "application/json", "{\"status\":\"NEURAL_ACK\"}");
+    StaticJsonDocument<256> httpDoc;
+    if(!deserializeJson(httpDoc, message)) {
+      executeNeuralCommand(httpDoc["relay"], httpDoc["command"], httpDoc["duration"]);
+      server.send(200, "application/json", "{\"status\":\"ACK\"}");
     } else {
-      server.send(400, "text/plain", "Payload Garbled");
+      server.send(400, "text/plain", "Err");
     }
   });
   
@@ -141,12 +144,11 @@ void setup() {
 
 void reconnectCloud() {
   while (!mqttClient.connected()) {
-    Serial.print("AGROCORE: Negotiating Cloud Link...");
+    Serial.print("Agrocore: Linking...");
     if (mqttClient.connect(agroId)) {
-      Serial.println("CONNECTED");
+      Serial.println("SYNCED");
       mqttClient.subscribe(actuationTopic.c_str());
     } else {
-      Serial.printf("FAILED (rc=%d), retrying in 5s...\n", mqttClient.state());
       delay(5000);
     }
   }
@@ -160,15 +162,9 @@ void loop() {
   }
   mqttClient.loop();
   
-  static unsigned long lastCheck = 0;
-  if (millis() - lastCheck > 15000) { 
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("STATUS: [ONLINE] RSSI: %d dBm | CLOUD: %s\n", 
-                    WiFi.RSSI(), mqttClient.connected() ? "READY" : "ERR");
-    } else {
-      WiFi.disconnect();
-      WiFi.begin(ssid, password);
-    }
-    lastCheck = millis();
-  }
+  // Independent Hardware Watchdog
+  unsigned long now = millis();
+  if (phOffAt > 0 && now >= phOffAt) { physicalDrive(PUMP_PH, "OFF"); phOffAt = 0; Serial.println("R1 IDLE"); }
+  if (naOffAt > 0 && now >= naOffAt) { physicalDrive(PUMP_NA, "OFF"); naOffAt = 0; Serial.println("R2 IDLE"); }
+  if (nbOffAt > 0 && now >= nbOffAt) { physicalDrive(PUMP_NB, "OFF"); nbOffAt = 0; Serial.println("R3 IDLE"); }
 }
