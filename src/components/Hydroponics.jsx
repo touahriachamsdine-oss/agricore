@@ -71,13 +71,16 @@ const Hydroponics = () => {
     const [isOnline, setIsOnline] = useState(false);
     const [isCloudLinked, setIsCloudLinked] = useState(false);
 
-    // ACTUATION CONFIG (Calibration)
-    const [phFactor, setPhFactor] = useState(1500); // ms per 0.1 PH delta
-    const [ecFactor, setEcFactor] = useState(2000); // ms per 0.1 EC delta
-    const [maxPulse, setMaxPulse] = useState(8000); // max duration safety cap (ms)
+    // ACTUATION CONFIG (Calibration & Volumetrics)
+    const [tankVolume, setTankVolume] = useState(50); // Liters
+    const [pumpFlow, setPumpFlow] = useState(1.5);    // ml per second
+    const [phFactor, setPhFactor] = useState(10);     // ml per 1.0 PH move (scaled by vol)
+    const [ecFactor, setEcFactor] = useState(50);     // ml per 1.0 EC move (scaled by vol)
+    const [maxBatchMl, setMaxBatchMl] = useState(5);  // Max dose per sequence (ml)
 
     // ACTUATION STATE
     const [isDosing, setIsDosing] = useState(false);
+    const [dosingQueue, setDosingQueue] = useState([]);
     const [activeRelay, setActiveRelay] = useState(null);
     const [logs, setLogs] = useState([]);
 
@@ -108,49 +111,71 @@ const Hydroponics = () => {
         addLog(`OVERRIDE COMPLETE: Relay ${relay} idle.`);
     };
 
-    const runAIDosingCycle = async () => {
-        if (isDosing) return;
+    const queueNextSequence = () => {
+        const queue = [];
+
+        // 1. PH CALCULATION (Relay 1)
+        if (currentPH > selectedSubtype.ph) {
+            const phDelta = currentPH - selectedSubtype.ph;
+            // Target dose (ml) = Delta * (Factor / 50L base) * Current Tank Volume
+            const targetMl = (phDelta * phFactor) * (tankVolume / 50);
+            const batchMl = Math.min(targetMl, maxBatchMl);
+            const duration = Math.round((batchMl / pumpFlow) * 1000);
+
+            queue.push({
+                relay: 1,
+                name: 'PH DOWN',
+                ml: batchMl.toFixed(1),
+                duration,
+                reason: `PH is high (+${phDelta.toFixed(2)}). Recommending ${batchMl.toFixed(1)}ml correction.`
+            });
+        }
+
+        // 2. NUTRIENT CALCULATION (Relay 2 & 3)
+        if (currentEC < selectedSubtype.ec) {
+            const ecDelta = selectedSubtype.ec - currentEC;
+            const targetMl = (ecDelta * ecFactor) * (tankVolume / 50);
+            const batchMl = Math.min(targetMl, maxBatchMl);
+            const duration = Math.round((batchMl / pumpFlow) * 1000);
+
+            queue.push({
+                relay: 2,
+                name: 'NUTRIENT A',
+                ml: batchMl.toFixed(1),
+                duration,
+                reason: `Nutrition deficit identified. Batching ${batchMl.toFixed(1)}ml of Sol A.`
+            });
+            queue.push({
+                relay: 3,
+                name: 'NUTRIENT B',
+                ml: batchMl.toFixed(1),
+                duration,
+                reason: `Sequencing ${batchMl.toFixed(1)}ml of Sol B.`
+            });
+        }
+
+        setDosingQueue(queue);
+    };
+
+    const executeSequence = async () => {
+        if (isDosing || dosingQueue.length === 0) return;
 
         setIsDosing(true);
-        addLog(`NEURAL ENGINE: Initializing Correction for ${selectedSubtype.name}...`);
+        addLog(`NEURAL ENGINE: Dispatching Managed Batch...`);
 
         try {
             const targetId = isCloudLinked ? nodeId : esp32Ip;
 
-            // 1. PH BALANCE (Relay 1)
-            if (currentPH > selectedSubtype.ph) {
-                const phDelta = currentPH - selectedSubtype.ph;
-                // Calculate pulse based on user calibration (scaled per 0.1 delta)
-                const calculatedPulse = Math.round((phDelta / 0.1) * phFactor);
-                const finalPulse = Math.min(calculatedPulse, maxPulse);
-
-                addLog(`DECISION: High PH (+${phDelta.toFixed(2)}). Actuating PH Down for ${finalPulse}ms`);
-                setActiveRelay(1);
-                await IoTProxy.actuate(targetId, 1, 'ON', finalPulse);
-                await new Promise(r => setTimeout(r, 1000 + finalPulse));
+            for (const step of dosingQueue) {
+                addLog(`ACTION: ${step.reason}`);
+                setActiveRelay(step.relay);
+                await IoTProxy.actuate(targetId, step.relay, 'ON', step.duration);
+                await new Promise(r => setTimeout(r, 1000 + step.duration));
                 setActiveRelay(null);
             }
 
-            // 2. NUTRIENT BALANCE (Relay 2 & 3)
-            if (currentEC < selectedSubtype.ec) {
-                const ecDelta = selectedSubtype.ec - currentEC;
-                const calculatedPulse = Math.round((ecDelta / 0.1) * ecFactor);
-                const finalPulse = Math.min(calculatedPulse, maxPulse);
-
-                addLog(`DECISION: Low EC identified (-${ecDelta.toFixed(2)}). Dosing A/B mix for ${finalPulse}ms`);
-
-                setActiveRelay(2);
-                await IoTProxy.actuate(targetId, 2, 'ON', finalPulse);
-                await new Promise(r => setTimeout(r, 1000 + finalPulse));
-                setActiveRelay(null);
-
-                setActiveRelay(3);
-                await IoTProxy.actuate(targetId, 3, 'ON', finalPulse);
-                await new Promise(r => setTimeout(r, 1000 + finalPulse));
-                setActiveRelay(null);
-            }
-
-            addLog(`NEURAL ENGINE: Varietal Sync Complete.`);
+            addLog(`NEURAL ENGINE: Sequence Dispatched. Wait for mixing before next analysis.`);
+            setDosingQueue([]);
         } catch (err) {
             addLog(`ERROR: Actuation Link Failure.`);
         } finally {
@@ -247,14 +272,33 @@ const Hydroponics = () => {
                                 />
                             </div>
                         </div>
-                        <button
-                            className={`ai-pulse-btn ${isDosing ? 'active' : ''}`}
-                            onClick={runAIDosingCycle}
-                            disabled={isDosing}
-                        >
-                            {isDosing ? <RiPulseLine className="spin" /> : <RiPlayCircleLine />}
-                            <span>{isDosing ? 'NEURAL SYNCING...' : 'AI RECALIBRATION'}</span>
-                        </button>
+                        <div className="managed-dosing-zone">
+                            {dosingQueue.length > 0 ? (
+                                <div className="queue-display">
+                                    <div className="queue-summary">
+                                        <span>SUGGESTED NEXT SEQUENCE:</span>
+                                        <strong>{dosingQueue.reduce((acc, curr) => acc + parseFloat(curr.ml), 0).toFixed(1)}ml TOTAL</strong>
+                                    </div>
+                                    <button
+                                        className="execute-btn"
+                                        onClick={executeSequence}
+                                        disabled={isDosing}
+                                    >
+                                        {isDosing ? 'DISPATCHING PULSES...' : 'CONFIRM & ACTUATE BATCH'}
+                                    </button>
+                                    <button className="cancel-link" onClick={() => setDosingQueue([])}>DISCARD</button>
+                                </div>
+                            ) : (
+                                <button
+                                    className="ai-pulse-btn"
+                                    onClick={queueNextSequence}
+                                    disabled={isDosing}
+                                >
+                                    <RiPlayCircleLine />
+                                    <span>ANALYZE & SUGGEST DOSE</span>
+                                </button>
+                            )}
+                        </div>
                     </section>
                 </div>
 
@@ -301,11 +345,28 @@ const Hydroponics = () => {
                     <section className="hardware-tuning glass-panel">
                         <div className="card-header">
                             <RiSettings3Line size={20} className="icon-purple" />
-                            <h4>HARDWARE TUNING</h4>
+                            <h4>VOLUMETRIC CONFIG</h4>
                         </div>
                         <div className="calibration-grid">
                             <div className="tune-field">
-                                <label>PH PULSE RATE (ms / 0.1 Δ)</label>
+                                <label>TANK VOLUME (LITERS)</label>
+                                <input
+                                    type="number"
+                                    value={tankVolume}
+                                    onChange={e => setTankVolume(parseInt(e.target.value))}
+                                />
+                            </div>
+                            <div className="tune-field">
+                                <label>PUMP FLOW (ML/SEC)</label>
+                                <input
+                                    type="number"
+                                    step="0.1"
+                                    value={pumpFlow}
+                                    onChange={e => setPumpFlow(parseFloat(e.target.value))}
+                                />
+                            </div>
+                            <div className="tune-field">
+                                <label>PH STR (ml per 1.0Δ/50L)</label>
                                 <input
                                     type="number"
                                     value={phFactor}
@@ -313,7 +374,7 @@ const Hydroponics = () => {
                                 />
                             </div>
                             <div className="tune-field">
-                                <label>NUTRIENT RATE (ms / 0.1 Δ)</label>
+                                <label>NUTR STR (ml per 1.0Δ/50L)</label>
                                 <input
                                     type="number"
                                     value={ecFactor}
@@ -321,11 +382,11 @@ const Hydroponics = () => {
                                 />
                             </div>
                             <div className="tune-field full">
-                                <label>GLOBAL SAFETY CAP (MAX MS)</label>
+                                <label>MAX BATCH SIZE (ML)</label>
                                 <input
                                     type="number"
-                                    value={maxPulse}
-                                    onChange={e => setMaxPulse(parseInt(e.target.value))}
+                                    value={maxBatchMl}
+                                    onChange={e => setMaxBatchMl(parseInt(e.target.value))}
                                 />
                             </div>
                         </div>
@@ -425,6 +486,20 @@ const Hydroponics = () => {
 
                 .log-container { display: flex; flex-direction: column; height: 100%; min-height: 120px; }
                 .log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; font-size: 0.7rem; font-weight: 900; opacity: 0.6; }
+                
+                .managed-dosing-zone { margin-top: 1rem; }
+                .queue-display { 
+                    background: rgba(153, 173, 122, 0.1); padding: 15px; border-radius: 12px; border: 1px solid var(--secondary);
+                }
+                .queue-summary { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+                .queue-summary span { font-size: 0.6rem; font-weight: 800; opacity: 0.7; }
+                .queue-summary strong { font-family: 'Orbitron', sans-serif; color: var(--secondary); font-size: 1.1rem; }
+                .execute-btn { 
+                    width: 100%; padding: 12px; border-radius: 8px; border: none; background: var(--secondary); color: white; font-weight: 900; cursor: pointer;
+                }
+                .cancel-link { 
+                    width: 100%; background: none; border: none; font-size: 0.6rem; font-weight: 800; color: #888; margin-top: 10px; cursor: pointer;
+                }
                 .log-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
                 .log-row { font-family: monospace; font-size: 0.7rem; padding: 8px; background: rgba(0,0,0,0.02); border-radius: 4px; border-left: 2px solid #ccc; }
                 .log-row.highlight { background: rgba(153, 173, 122, 0.05); border-left-color: var(--secondary); }
