@@ -45,7 +45,16 @@ const AppContent = () => {
     { id: 'journal', label: t('journal'), icon: <RiBookReadLine /> },
     { id: 'chat', label: t('chat_agent'), icon: <RiMessage3Line /> },
     { id: 'climate', label: t('climate'), icon: <RiCloudLine /> },
-    { id: 'hydro', label: 'Hydroponics', icon: <RiDropLine /> + (isMissionActive ? ' ●' : '') },
+    {
+      id: 'hydro',
+      label: 'Hydroponics',
+      icon: (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <RiDropLine />
+          {isMissionActive && <span style={{ color: '#ef4444', animation: 'pulse 1.5s infinite', fontSize: '1.2rem' }}>●</span>}
+        </div>
+      )
+    },
   ];
 
   const renderModule = () => {

@@ -53,16 +53,31 @@ const Hydroponics = () => {
     const [isCloudLinked, setIsCloudLinked] = useState(false);
 
     useEffect(() => {
-        IoTProxy.connect(nodeId, setIsCloudLinked);
-        const subId = `agrocore/telemetry/${nodeId}`;
-        IoTProxy.client?.on('message', (topic, message) => {
-            if (topic === subId) {
-                try { setTelemetry(JSON.parse(message.toString())); } catch (e) { }
-            }
+        console.log(`[Hydroponics] Link request: ${nodeId}`);
+        IoTProxy.connect(nodeId, (status) => {
+            console.log(`[Hydroponics] Link status update: ${status ? 'READY' : 'OFFLINE'}`);
+            setIsCloudLinked(status);
         });
-        IoTProxy.client?.subscribe(subId);
-        return () => { IoTProxy.client?.unsubscribe(subId); };
-    }, [nodeId, isCloudLinked]);
+
+        const subId = `agrocore/telemetry/${nodeId}`;
+        const handleMsg = (t, m) => {
+            if (t === subId) {
+                try { setTelemetry(JSON.parse(m.toString())); } catch (e) { }
+            }
+        };
+
+        if (IoTProxy.client) {
+            IoTProxy.client.on('message', handleMsg);
+            IoTProxy.client.subscribe(subId);
+            // Force status sync if already connected
+            if (IoTProxy.client.connected) setIsCloudLinked(true);
+        }
+
+        return () => {
+            IoTProxy.client?.off('message', handleMsg);
+            IoTProxy.client?.unsubscribe(subId);
+        };
+    }, [nodeId]);
 
     const planMission = (silent = false) => {
         if (emergencyStatus) return;
@@ -83,16 +98,24 @@ const Hydroponics = () => {
     };
 
     const runMission = async (p = missionPlan) => {
-        if (isDosing || !p || emergencyStatus) return;
+        if (isDosing || !p || emergencyStatus) {
+            console.warn("[Hydroponics] Mission rejected:", { isDosing, hasPlan: !!p, emergencyStatus });
+            return;
+        }
+        console.log("[Hydroponics] STARTING MISSION EXECUTION", p);
         setIsDosing(true);
         setIsMissionActive(true);
         setMissionPlan(null);
         try {
             for (const step of p) {
                 if (emergencyStatus) break;
+                console.log(`[Hydroponics] EXECUTING STEP: ${step.name}`, step);
                 setActiveMission({ ...step, remaining: step.duration });
                 const start = Date.now();
-                await IoTProxy.actuate(nodeId, step.relay, 'ON', step.duration);
+
+                const result = await IoTProxy.actuate(nodeId, step.relay, 'ON', step.duration);
+                console.log(`[Hydroponics] IoT Proxy Result:`, result);
+
                 const timer = setInterval(() => {
                     setActiveMission(prev => prev ? { ...prev, remaining: Math.max(0, step.duration - (Date.now() - start)) } : null);
                 }, 50);
@@ -102,9 +125,13 @@ const Hydroponics = () => {
                 setCompletedMissions(prev => [`[${new Date().toLocaleTimeString()}] ${step.name} (${(step.duration / 1000).toFixed(1)}s)`, ...prev.slice(0, 5)]);
                 await new Promise(r => setTimeout(r, 2000));
             }
+            console.log("[Hydroponics] MISSION COMPLETE");
+        } catch (err) {
+            console.error("[Hydroponics] MISSION CRITICAL FAILURE:", err);
         } finally {
             setIsDosing(false);
             setIsMissionActive(false);
+            console.log("[Hydroponics] MISSION CONTEXT RESET");
         }
     };
 
@@ -151,9 +178,14 @@ const Hydroponics = () => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                     <div>
                         <h2 className="glow-text-primary" style={{ fontSize: '1.6rem', marginBottom: '5px' }}>HYDROPONICS COMMAND</h2>
-                        <div style={{ display: 'flex', gap: '15px' }}>
+                        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
                             <span className="text-dim" style={{ fontSize: '0.65rem', fontWeight: 800 }}>NODE: {nodeId}</span>
                             <span style={{ fontSize: '0.65rem', fontWeight: 800, color: isCloudLinked ? 'var(--primary)' : '#ef4444' }}>{isCloudLinked ? '● CONNECTED' : '○ DISCONNECTED'}</span>
+                            {!isCloudLinked && (
+                                <button onClick={() => window.location.reload()} style={{ background: 'none', border: '1px solid var(--secondary)', color: 'var(--secondary)', fontSize: '0.5rem', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}>
+                                    FORCE RECONNECT
+                                </button>
+                            )}
                         </div>
                     </div>
                 </div>
