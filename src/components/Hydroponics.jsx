@@ -6,7 +6,9 @@ import {
     RiPlayCircleLine,
     RiFocus3Line,
     RiAlertLine,
-    RiTimerFlashLine
+    RiTimerFlashLine,
+    RiWifiLine,
+    RiSettings3Line
 } from 'react-icons/ri';
 import { useI18n } from '../context/i18nContext';
 import { usePlatform } from '../context/PlatformContext';
@@ -29,6 +31,21 @@ const Hydroponics = () => {
     const { t } = useI18n();
     const { setIsMissionActive, setActiveVariety } = usePlatform();
 
+    // IDENTITY & CONNECTION
+    const [nodeId, setNodeIdState] = useState(localStorage.getItem('agro_node_id') || 'AGRO_NODE_01');
+    const [isIdEditing, setIsIdEditing] = useState(false);
+    const [isCloudLinked, setIsCloudLinked] = useState(false);
+    const [lastActivity, setLastActivity] = useState(Date.now());
+    const [signalDecay, setSignalDecay] = useState(0);
+
+    const updateNodeId = (id) => {
+        setNodeIdState(id);
+        localStorage.setItem('agro_node_id', id);
+        setIsIdEditing(false);
+        window.location.reload(); // Force full reconnect
+    };
+
+    // VARIETAL STATE
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedVariety, setSelectedVarietyState] = useState(MASTER_VAULT["ALGERIAN HERITAGE"][0]);
     const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -42,34 +59,41 @@ const Hydroponics = () => {
         setActiveVariety(selectedVariety);
     }, []);
 
+    // TELEMETRY
     const [telemetry, setTelemetry] = useState({ ph: 7.0, ec: 1.0, rssi: -60 });
+
+    // MISSION STATE
     const [missionPlan, setMissionPlan] = useState(null);
     const [activeMission, setActiveMission] = useState(null);
     const [completedMissions, setCompletedMissions] = useState([]);
+
     const [autoPilot, setAutoPilot] = useState(false);
     const [isDosing, setIsDosing] = useState(false);
     const [emergencyStatus, setEmergencyStatus] = useState(false);
-    const [nodeId] = useState(localStorage.getItem('agro_node_id') || 'AGRO_NODE_01');
-    const [isCloudLinked, setIsCloudLinked] = useState(false);
 
+    // IOT CONNECTION
     useEffect(() => {
-        console.log(`[Hydroponics] Link request: ${nodeId}`);
+        console.log(`[Hydroponics] Registering node: ${nodeId}`);
         IoTProxy.connect(nodeId, (status) => {
-            console.log(`[Hydroponics] Link status update: ${status ? 'READY' : 'OFFLINE'}`);
+            console.log(`[Hydroponics] Link Status Sync: ${status ? 'UP' : 'DOWN'}`);
             setIsCloudLinked(status);
+            if (status) setLastActivity(Date.now());
         });
 
         const subId = `agrocore/telemetry/${nodeId}`;
-        const handleMsg = (t, m) => {
-            if (t === subId) {
-                try { setTelemetry(JSON.parse(m.toString())); } catch (e) { }
+        const handleMsg = (topic, message) => {
+            if (topic === subId) {
+                try {
+                    const data = JSON.parse(message.toString());
+                    setTelemetry(data);
+                    setLastActivity(Date.now());
+                } catch (e) { }
             }
         };
 
         if (IoTProxy.client) {
             IoTProxy.client.on('message', handleMsg);
             IoTProxy.client.subscribe(subId);
-            // Force status sync if already connected
             if (IoTProxy.client.connected) setIsCloudLinked(true);
         }
 
@@ -78,6 +102,14 @@ const Hydroponics = () => {
             IoTProxy.client?.unsubscribe(subId);
         };
     }, [nodeId]);
+
+    // SIGNAL DECAY MONITOR
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setSignalDecay(Math.floor((Date.now() - lastActivity) / 1000));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [lastActivity]);
 
     const planMission = (silent = false) => {
         if (emergencyStatus) return;
@@ -98,48 +130,48 @@ const Hydroponics = () => {
     };
 
     const runMission = async (p = missionPlan) => {
-        if (isDosing || !p || emergencyStatus) {
-            console.warn("[Hydroponics] Mission rejected:", { isDosing, hasPlan: !!p, emergencyStatus });
-            return;
-        }
-        console.log("[Hydroponics] STARTING MISSION EXECUTION", p);
+        if (isDosing || !p || emergencyStatus) return;
         setIsDosing(true);
         setIsMissionActive(true);
         setMissionPlan(null);
         try {
+            console.log("[Hydroponics] MISSION PULSE START", p);
             for (const step of p) {
                 if (emergencyStatus) break;
-                console.log(`[Hydroponics] EXECUTING STEP: ${step.name}`, step);
                 setActiveMission({ ...step, remaining: step.duration });
                 const start = Date.now();
-
-                const result = await IoTProxy.actuate(nodeId, step.relay, 'ON', step.duration);
-                console.log(`[Hydroponics] IoT Proxy Result:`, result);
+                await IoTProxy.actuate(nodeId, step.relay, 'ON', step.duration);
 
                 const timer = setInterval(() => {
                     setActiveMission(prev => prev ? { ...prev, remaining: Math.max(0, step.duration - (Date.now() - start)) } : null);
                 }, 50);
+
                 await new Promise(r => setTimeout(r, step.duration + 500));
                 clearInterval(timer);
                 setActiveMission(null);
-                setCompletedMissions(prev => [`[${new Date().toLocaleTimeString()}] ${step.name} (${(step.duration / 1000).toFixed(1)}s)`, ...prev.slice(0, 5)]);
+                setCompletedMissions(prev => [`[${new Date().toLocaleTimeString()}] ${step.name} | ${step.duration}ms`, ...prev.slice(0, 5)]);
                 await new Promise(r => setTimeout(r, 2000));
             }
-            console.log("[Hydroponics] MISSION COMPLETE");
-        } catch (err) {
-            console.error("[Hydroponics] MISSION CRITICAL FAILURE:", err);
         } finally {
             setIsDosing(false);
             setIsMissionActive(false);
-            console.log("[Hydroponics] MISSION CONTEXT RESET");
         }
+    };
+
+    const runPumpTest = () => {
+        const testPlan = [
+            { relay: 1, name: 'TEST: PH DOWN', duration: 2000, icon: <RiFlaskLine />, reason: 'MANUAL DIAGNOSTIC' },
+            { relay: 2, name: 'TEST: NUTRIENT A', duration: 2000, icon: <RiPulseLine />, reason: 'MANUAL DIAGNOSTIC' },
+            { relay: 3, name: 'TEST: NUTRIENT B', duration: 2000, icon: <RiPulseLine />, reason: 'MANUAL DIAGNOSTIC' }
+        ];
+        setMissionPlan(testPlan);
     };
 
     const runEStop = () => {
         setEmergencyStatus(true); setAutoPilot(false);
         IoTProxy.actuate(nodeId, 0, 'STOP', 0);
         setActiveMission(null); setIsMissionActive(false);
-        setCompletedMissions(p => [`!!! EMERGENCY STOP ACTIVATED !!!`, ...p]);
+        setCompletedMissions(p => [`!!! STOP COMMAND BROADCAST !!!`, ...p]);
         setTimeout(() => setEmergencyStatus(false), 5000);
     };
 
@@ -148,7 +180,7 @@ const Hydroponics = () => {
         const id = setInterval(() => {
             const plan = planMission(true);
             if (plan?.length > 0) runMission(plan);
-        }, 15000);
+        }, 30000);
         return () => clearInterval(id);
     }, [autoPilot, isDosing, telemetry, selectedVariety, emergencyStatus]);
 
@@ -172,22 +204,32 @@ const Hydroponics = () => {
                 .estop-global { position: fixed; bottom: 30px; right: 30px; width: 70px; height: 70px; border-radius: 50%; background: #ef4444; color: white; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; cursor: pointer; box-shadow: 0 10px 30px rgba(239, 68, 68, 0.4); z-index: 1000; border: 5px solid rgba(255,255,255,0.2); }
                 .progress-wrap { background: rgba(0,0,0,0.05); height: 8px; border-radius: 4px; overflow: hidden; margin-top: 8px; }
                 .progress-active { height: 100%; background: var(--primary); transition: linear 0.1s; }
+                .id-input { background: rgba(0,0,0,0.2); border: 1px solid var(--secondary); color: var(--primary); padding: 5px 10px; border-radius: 6px; font-family: var(--font-header); font-size: 0.7rem; width: 150px; }
             `}</style>
 
             <header style={{ marginBottom: 'var(--spacing-lg)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
                         <h2 className="glow-text-primary" style={{ fontSize: '1.6rem', marginBottom: '5px' }}>HYDROPONICS COMMAND</h2>
-                        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
-                            <span className="text-dim" style={{ fontSize: '0.65rem', fontWeight: 800 }}>NODE: {nodeId}</span>
-                            <span style={{ fontSize: '0.65rem', fontWeight: 800, color: isCloudLinked ? 'var(--primary)' : '#ef4444' }}>{isCloudLinked ? '● CONNECTED' : '○ DISCONNECTED'}</span>
-                            {!isCloudLinked && (
-                                <button onClick={() => window.location.reload()} style={{ background: 'none', border: '1px solid var(--secondary)', color: 'var(--secondary)', fontSize: '0.5rem', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}>
-                                    FORCE RECONNECT
-                                </button>
-                            )}
+                        <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <RiCpuLine color="var(--primary)" />
+                                {isIdEditing ? (
+                                    <input autoFocus className="id-input" defaultValue={nodeId} onBlur={(e) => updateNodeId(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && updateNodeId(e.target.value)} />
+                                ) : (
+                                    <span className="text-dim" style={{ fontSize: '0.65rem', fontWeight: 800, cursor: 'pointer' }} onClick={() => setIsIdEditing(true)}>NODE ID: {nodeId} <RiSettings3Line style={{ verticalAlign: 'middle' }} /></span>
+                                )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <RiWifiLine color={isCloudLinked ? 'var(--primary)' : '#ef4444'} />
+                                <span style={{ fontSize: '0.65rem', fontWeight: 800, color: isCloudLinked ? 'var(--primary)' : '#ef4444' }}>{isCloudLinked ? 'CONNECTED' : 'OFFLINE'}</span>
+                                {signalDecay > 10 && <span className="animate-pulse" style={{ fontSize: '0.6rem', color: '#ef4444', fontWeight: 900 }}>! SIGNAL DECAY: {signalDecay}s</span>}
+                            </div>
                         </div>
                     </div>
+                    {!isCloudLinked && (
+                        <button className="glass-panel" onClick={() => window.location.reload()} style={{ padding: '8px 15px', color: 'var(--primary)', border: '1px solid var(--primary)', background: 'none', fontSize: '0.6rem', fontWeight: 800, cursor: 'pointer' }}>RE-ESTABLISH LINK</button>
+                    )}
                 </div>
             </header>
 
@@ -237,7 +279,7 @@ const Hydroponics = () => {
                     <div className="glass-panel" style={{ padding: 'var(--spacing-lg)', height: '100%', display: 'flex', flexDirection: 'column' }}>
                         <div className="orb-container">
                             <div className="orb-pulse" />
-                            <div className="orb-core">{telemetry.ph.toFixed(2)}</div>
+                            <div className="orb-core" style={{ color: signalDecay > 15 ? 'var(--text-dim)' : 'var(--primary)' }}>{telemetry.ph.toFixed(2)}</div>
                         </div>
                         <div className="stat-grid" style={{ marginBottom: '1.5rem' }}>
                             <div className="stat-unit">
@@ -250,9 +292,12 @@ const Hydroponics = () => {
                             </div>
                         </div>
                         <div className="stack-area" style={{ flex: 1 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '1rem', borderBottom: '1px solid var(--bg-block)', paddingBottom: '10px' }}>
-                                <RiCpuLine className="glow-text-primary" />
-                                <span style={{ fontSize: '0.6rem', fontWeight: 900, letterSpacing: '2px' }}>NEURAL EXECUTION STACK</span>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem', borderBottom: '1px solid var(--bg-block)', paddingBottom: '10px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                                    <RiCpuLine className="glow-text-primary" />
+                                    <span style={{ fontSize: '0.6rem', fontWeight: 900, letterSpacing: '2px' }}>NEURAL EXECUTION STACK</span>
+                                </div>
+                                <button onClick={runPumpTest} style={{ background: 'none', border: '1px dashed var(--primary)', color: 'var(--primary)', fontSize: '0.5rem', fontWeight: 900, cursor: 'pointer', padding: '2px 8px', borderRadius: '4px' }}>2s DIAGNOSTIC PULSE</button>
                             </div>
                             {activeMission ? (
                                 <div className="glass-panel" style={{ padding: '1rem', borderColor: 'var(--primary)', borderLeftWidth: '5px' }}>
@@ -266,6 +311,7 @@ const Hydroponics = () => {
                                 </div>
                             ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                    {completedMissions.length === 0 && <div className="text-dim" style={{ fontSize: '0.6rem', textAlign: 'center', marginTop: '1rem' }}>WAITING FOR IMPULSE COMMANDS...</div>}
                                     {completedMissions.map((log, i) => (
                                         <div key={i} style={{ fontSize: '0.6rem', padding: '10px', background: 'rgba(0,0,0,0.02)', borderRadius: '8px', borderLeft: '2px solid var(--secondary)', opacity: 1 - (i * 0.2) }}>{log}</div>
                                     ))}

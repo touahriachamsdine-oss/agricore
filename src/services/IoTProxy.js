@@ -16,17 +16,28 @@ export const IoTProxy = {
      * @param {string} channelId - Unique hardware ID
      */
     connect: (channelId, onStatusChange) => {
-        if (IoTProxy.client) return;
+        if (IoTProxy.client && IoTProxy.client.connected) return;
 
-        console.log(`[IoTProxy] Connecting to Cloud Relay: ${channelId}`);
-        IoTProxy.client = mqtt.connect(BROKER_URL);
+        console.log(`[IoTProxy] INITIATING LINK: ${channelId}`);
+        // Explicitly set options for HiveMQ WSS compatibility
+        IoTProxy.client = mqtt.connect(BROKER_URL, {
+            clientId: 'AGRO_WEB_' + Math.random().toString(16).substr(2, 8),
+            keepalive: 60,
+            path: '/mqtt'
+        });
 
         IoTProxy.client.on('connect', () => {
-            console.log('[IoTProxy] Cloud Link Ready.');
+            console.log(`[IoTProxy] UPLINK ESTABLISHED. Channel: ${channelId}`);
             onStatusChange(true);
         });
 
-        IoTProxy.client.on('error', () => {
+        IoTProxy.client.on('error', (err) => {
+            console.error('[IoTProxy] LINK FAILURE:', err);
+            onStatusChange(false);
+        });
+
+        IoTProxy.client.on('close', () => {
+            console.warn('[IoTProxy] LINK DOWN.');
             onStatusChange(false);
         });
     },
@@ -39,14 +50,15 @@ export const IoTProxy = {
      * @param {number} durationMs - How long to keep the pump on
      */
     actuate: async (channelId, relay, state, durationMs = 300) => {
-        console.log(`[IoTProxy] PULSE BROADCAST: ${channelId} -> R:${relay} (${durationMs}ms)`);
+        const topic = `agrocore/actuate/${channelId}`;
+        const payload = JSON.stringify({ relay, duration: durationMs });
+
+        console.log(`[IoTProxy] BROADCAST -> Topic: ${topic} | Content: ${payload}`);
 
         // Always try Cloud Relay first if connected
         if (IoTProxy.client && IoTProxy.client.connected) {
-            const topic = `agrocore/actuate/${channelId}`;
-            const payload = JSON.stringify({ relay, duration: durationMs });
             IoTProxy.client.publish(topic, payload);
-            return { success: true, method: 'CLOUD' };
+            return { success: true, method: 'CLOUD', topic };
         }
 
         // Fallback to direct HTTP for local development (might be blocked on HTTPS)
