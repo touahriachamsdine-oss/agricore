@@ -39,28 +39,50 @@ struct CropProfile {
 CropProfile activeProfile = {"LOCAL_PROD_1", 6.2, 1.8, 4000}; 
 
 // ---------------------------------------------------------
-// HARDWARE DEFINITIONS (GPIO 4, 5, 6)
+// HARDWARE STRATEGY
 // ---------------------------------------------------------
-#define PH_DOWN_PUMP 4
-#define NUTRIENT_A_PUMP 5
-#define NUTRIENT_B_PUMP 6
+#define PUMP_CHANNELS 3
+const int pumps[PUMP_CHANNELS] = {4, 5, 6}; // R1, R2, R3
+unsigned long pumpOffAt[PUMP_CHANNELS] = {0, 0, 0};
+bool activeLowLogic = true; // Set to false for Active-High relays
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 WebServer server(80);
 StaticJsonDocument<256> jsonDoc;
 
-void executePulse(int relay, int duration) {
-  int targetPin = 0;
-  if (relay == 1) targetPin = PH_DOWN_PUMP;
-  else if (relay == 2) targetPin = NUTRIENT_A_PUMP;
-  else if (relay == 3) targetPin = NUTRIENT_B_PUMP;
-
-  if (targetPin != 0) {
-    Serial.printf("EXECUTING NEURAL PULSE: Pin %d for %dms\n", targetPin, duration);
-    digitalWrite(targetPin, LOW); 
-    delay(duration);
-    digitalWrite(targetPin, HIGH);
+void executePulse(int ch, String command, int duration) {
+  if(ch < 0 || ch >= PUMP_CHANNELS) return;
+  
+  if(command == "ON") {
+    // Determine physical level based on relay logic
+    int onLevel = activeLowLogic ? LOW : HIGH;
+    digitalWrite(pumps[ch], onLevel);
+    if(duration > 0) {
+      pumpOffAt[ch] = millis() + duration;
+    }
+    Serial.print("NEURAL LINK: Channel "); Serial.print(ch+1); Serial.println(" ACTIVE.");
+  } 
+  else if(command == "OFF") {
+    int offLevel = activeLowLogic ? HIGH : LOW;
+    digitalWrite(pumps[ch], offLevel);
+    pumpOffAt[ch] = 0;
+    Serial.print("NEURAL LINK: Channel "); Serial.print(ch+1); Serial.println(" IDLE.");
+  }
+  else if(command == "STOP_ALL") {
+    for(int i=0; i<PUMP_CHANNELS; i++) {
+        digitalWrite(pumps[i], activeLowLogic ? HIGH : LOW);
+        pumpOffAt[i] = 0;
+    }
+    Serial.println("NEURAL LINK: EMERGENCY HALT EXECUTED.");
+  }
+  else if(command == "LOGIC_HIGH") {
+    activeLowLogic = false;
+    Serial.println("NEURAL LINK: Polarity set to ACTIVE-HIGH.");
+  }
+  else if(command == "LOGIC_LOW") {
+    activeLowLogic = true;
+    Serial.println("NEURAL LINK: Polarity set to ACTIVE-LOW.");
   }
 }
 
@@ -73,21 +95,17 @@ void onNeuralImpulse(char* topic, byte* payload, unsigned int length) {
   
   DeserializationError error = deserializeJson(jsonDoc, message);
   if (!error) {
-    executePulse(jsonDoc["relay"], jsonDoc["duration"]);
+    executePulse(jsonDoc["relay"].as<int>() - 1, jsonDoc["command"], jsonDoc["duration"]);
   }
 }
 
 void setup() {
   Serial.begin(115200);
   
-  pinMode(PH_DOWN_PUMP, OUTPUT);
-  pinMode(NUTRIENT_A_PUMP, OUTPUT);
-  pinMode(NUTRIENT_B_PUMP, OUTPUT);
-
-  // Default OFF
-  digitalWrite(PH_DOWN_PUMP, HIGH);
-  digitalWrite(NUTRIENT_A_PUMP, HIGH);
-  digitalWrite(NUTRIENT_B_PUMP, HIGH);
+  for(int i=0; i<PUMP_CHANNELS; i++) {
+    pinMode(pumps[i], OUTPUT);
+    digitalWrite(pumps[i], activeLowLogic ? HIGH : LOW);
+  }
 
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {

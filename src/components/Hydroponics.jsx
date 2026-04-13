@@ -77,9 +77,12 @@ const Hydroponics = () => {
     const [phFactor, setPhFactor] = useState(10);     // ml per 1.0 PH move (scaled by vol)
     const [ecFactor, setEcFactor] = useState(50);     // ml per 1.0 EC move (scaled by vol)
     const [maxBatchMl, setMaxBatchMl] = useState(5);  // Max dose per sequence (ml)
+    const [isAdvanced, setIsAdvanced] = useState(false);
+    const [invertLogic, setInvertLogic] = useState(false);
 
     // ACTUATION STATE
     const [isDosing, setIsDosing] = useState(false);
+    const [isAutopilot, setIsAutopilot] = useState(false);
     const [dosingQueue, setDosingQueue] = useState([]);
     const [activeRelay, setActiveRelay] = useState(null);
     const [logs, setLogs] = useState([]);
@@ -155,18 +158,24 @@ const Hydroponics = () => {
         }
 
         setDosingQueue(queue);
+
+        // AUTO-PILOT TRIGGER: If autopilot is active, actuate immediately
+        if (isAutopilot && queue.length > 0 && !isDosing) {
+            executeSequence(queue);
+        }
     };
 
-    const executeSequence = async () => {
-        if (isDosing || dosingQueue.length === 0) return;
+    const executeSequence = async (providedQueue = null) => {
+        const queueToRun = providedQueue || dosingQueue;
+        if (isDosing || queueToRun.length === 0) return;
 
         setIsDosing(true);
-        addLog(`NEURAL ENGINE: Dispatching Managed Batch...`);
+        addLog(`NEURAL ENGINE: Dispatching ${providedQueue ? 'AUTOPILOT' : 'MANAGED'} Batch...`);
 
         try {
             const targetId = isCloudLinked ? nodeId : esp32Ip;
 
-            for (const step of dosingQueue) {
+            for (const step of queueToRun) {
                 addLog(`ACTION: ${step.reason}`);
                 setActiveRelay(step.relay);
                 await IoTProxy.actuate(targetId, step.relay, 'ON', step.duration);
@@ -182,6 +191,22 @@ const Hydroponics = () => {
             setIsDosing(false);
             setActiveRelay(null);
         }
+    };
+
+    const emergencyStop = async () => {
+        const targetId = isCloudLinked ? nodeId : esp32Ip;
+        addLog(`CRITICAL: EMERGENCY STOP BROADCASTED.`);
+        setIsAutopilot(false);
+        setDosingQueue([]);
+        await IoTProxy.actuate(targetId, 0, 'STOP_ALL', 0);
+    };
+
+    const toggleInversion = async () => {
+        const nextState = !invertLogic;
+        const targetId = isCloudLinked ? nodeId : esp32Ip;
+        setInvertLogic(nextState);
+        await IoTProxy.actuate(targetId, 0, nextState ? 'LOGIC_HIGH' : 'LOGIC_LOW', 0);
+        addLog(`SYSTEM: Relay Polarity set to ${nextState ? 'ACTIVE-HIGH' : 'ACTIVE-LOW'}`);
     };
 
     return (
@@ -273,31 +298,48 @@ const Hydroponics = () => {
                             </div>
                         </div>
                         <div className="managed-dosing-zone">
-                            {dosingQueue.length > 0 ? (
-                                <div className="queue-display">
-                                    <div className="queue-summary">
-                                        <span>SUGGESTED NEXT SEQUENCE:</span>
-                                        <strong>{dosingQueue.reduce((acc, curr) => acc + parseFloat(curr.ml), 0).toFixed(1)}ml TOTAL</strong>
+                            <div className="autopilot-control">
+                                <label className="switch-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={isAutopilot}
+                                        onChange={e => setIsAutopilot(e.target.checked)}
+                                    />
+                                    <span className="slider"></span>
+                                    <span>AI AUTOPILOT MODE</span>
+                                </label>
+                            </div>
+
+                            {!isAutopilot && (
+                                dosingQueue.length > 0 ? (
+                                    <div className="queue-display">
+                                        <div className="queue-summary">
+                                            <span>SUGGESTED SEQUENCE:</span>
+                                            <strong>{dosingQueue.reduce((acc, curr) => acc + parseFloat(curr.ml), 0).toFixed(1)}ml</strong>
+                                        </div>
+                                        <button className="execute-btn" onClick={() => executeSequence()} disabled={isDosing}>
+                                            {isDosing ? 'DISPATCHING...' : 'CONFIRM & ACTUATE'}
+                                        </button>
+                                        <button className="cancel-link" onClick={() => setDosingQueue([])}>DISCARD</button>
                                     </div>
-                                    <button
-                                        className="execute-btn"
-                                        onClick={executeSequence}
-                                        disabled={isDosing}
-                                    >
-                                        {isDosing ? 'DISPATCHING PULSES...' : 'CONFIRM & ACTUATE BATCH'}
+                                ) : (
+                                    <button className="ai-pulse-btn" onClick={queueNextSequence} disabled={isDosing}>
+                                        <RiPlayCircleLine />
+                                        <span>ANALYZE CROP DEFICIT</span>
                                     </button>
-                                    <button className="cancel-link" onClick={() => setDosingQueue([])}>DISCARD</button>
-                                </div>
-                            ) : (
-                                <button
-                                    className="ai-pulse-btn"
-                                    onClick={queueNextSequence}
-                                    disabled={isDosing}
-                                >
-                                    <RiPlayCircleLine />
-                                    <span>ANALYZE & SUGGEST DOSE</span>
-                                </button>
+                                )
                             )}
+
+                            {isAutopilot && (
+                                <div className="autopilot-status">
+                                    <RiPulseLine className="spin icon-secondary" />
+                                    <span>AUTONOMOUS ENGINE ACTIVE</span>
+                                </div>
+                            )}
+
+                            <button className="emergency-stop-btn" onClick={emergencyStop}>
+                                EMERGENCY STOP
+                            </button>
                         </div>
                     </section>
                 </div>
@@ -342,55 +384,48 @@ const Hydroponics = () => {
                         </div>
                     </section>
 
-                    <section className="hardware-tuning glass-panel">
-                        <div className="card-header">
-                            <RiSettings3Line size={20} className="icon-purple" />
-                            <h4>VOLUMETRIC CONFIG</h4>
+                    <div className="advanced-trigger" onClick={() => setIsAdvanced(!isAdvanced)}>
+                        {isAdvanced ? 'HIDE ADVANCED HARDWARE' : 'SHOW ADVANCED HARDWARE'}
+                    </div>
+
+                    {isAdvanced && (
+                        <div className="advanced-panels">
+                            <section className="hardware-tuning glass-panel">
+                                <div className="card-header">
+                                    <RiSettings3Line size={20} className="icon-purple" />
+                                    <h4>HARDWARE SIMULATION</h4>
+                                </div>
+                                <div className="calibration-grid">
+                                    <div className="tune-field">
+                                        <label>TANK VOLUME (L)</label>
+                                        <input type="number" value={tankVolume} onChange={e => setTankVolume(parseInt(e.target.value))} />
+                                    </div>
+                                    <div className="tune-field">
+                                        <label>FLOW (ML/S)</label>
+                                        <input type="number" step="0.1" value={pumpFlow} onChange={e => setPumpFlow(parseFloat(e.target.value))} />
+                                    </div>
+                                    <div className="tune-field">
+                                        <label>PH STR (ml/1.0Δ)</label>
+                                        <input type="number" value={phFactor} onChange={e => setPhFactor(parseInt(e.target.value))} />
+                                    </div>
+                                    <div className="tune-field">
+                                        <label>NUTR STR (ml/1.0Δ)</label>
+                                        <input type="number" value={ecFactor} onChange={e => setEcFactor(parseInt(e.target.value))} />
+                                    </div>
+                                    <div className="tune-field">
+                                        <label>MAX BATCH (ML)</label>
+                                        <input type="number" value={maxBatchMl} onChange={e => setMaxBatchMl(parseInt(e.target.value))} />
+                                    </div>
+                                    <div className="tune-field">
+                                        <label>RELAY POLARITY</label>
+                                        <button className={`toggle-pill ${invertLogic ? 'active' : ''}`} onClick={toggleInversion}>
+                                            {invertLogic ? 'ACTIVE-HIGH' : 'ACTIVE-LOW'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </section>
                         </div>
-                        <div className="calibration-grid">
-                            <div className="tune-field">
-                                <label>TANK VOLUME (LITERS)</label>
-                                <input
-                                    type="number"
-                                    value={tankVolume}
-                                    onChange={e => setTankVolume(parseInt(e.target.value))}
-                                />
-                            </div>
-                            <div className="tune-field">
-                                <label>PUMP FLOW (ML/SEC)</label>
-                                <input
-                                    type="number"
-                                    step="0.1"
-                                    value={pumpFlow}
-                                    onChange={e => setPumpFlow(parseFloat(e.target.value))}
-                                />
-                            </div>
-                            <div className="tune-field">
-                                <label>PH STR (ml per 1.0Δ/50L)</label>
-                                <input
-                                    type="number"
-                                    value={phFactor}
-                                    onChange={e => setPhFactor(parseInt(e.target.value))}
-                                />
-                            </div>
-                            <div className="tune-field">
-                                <label>NUTR STR (ml per 1.0Δ/50L)</label>
-                                <input
-                                    type="number"
-                                    value={ecFactor}
-                                    onChange={e => setEcFactor(parseInt(e.target.value))}
-                                />
-                            </div>
-                            <div className="tune-field full">
-                                <label>MAX BATCH SIZE (ML)</label>
-                                <input
-                                    type="number"
-                                    value={maxBatchMl}
-                                    onChange={e => setMaxBatchMl(parseInt(e.target.value))}
-                                />
-                            </div>
-                        </div>
-                    </section>
+                    )}
 
                     <section className="ai-logic-log glass-panel">
                         <div className="log-container">
@@ -500,6 +535,25 @@ const Hydroponics = () => {
                 .cancel-link { 
                     width: 100%; background: none; border: none; font-size: 0.6rem; font-weight: 800; color: #888; margin-top: 10px; cursor: pointer;
                 }
+
+                .autopilot-control { margin-bottom: 1rem; padding: 10px; background: rgba(0,0,0,0.02); border-radius: 8px; border: 1px dashed #ccc; }
+                .switch-label { display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.7rem; font-weight: 900; }
+                .autopilot-status { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 1rem; font-size: 0.7rem; font-weight: 900; color: var(--secondary); }
+                .emergency-stop-btn { 
+                    width: 100%; margin-top: 1rem; padding: 12px; border-radius: 8px; border: none; background: #ff4d4d; color: white; 
+                    font-weight: 900; cursor: pointer; text-transform: uppercase; box-shadow: 0 4px 0 #cc0000;
+                }
+                .emergency-stop-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #cc0000; }
+
+                .advanced-trigger { 
+                    text-align: center; font-size: 0.6rem; font-weight: 900; color: #888; cursor: pointer; margin: 2rem 0; text-decoration: underline; 
+                }
+                .advanced-panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+                .toggle-pill { 
+                    width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #ddd; background: white; 
+                    font-size: 0.6rem; font-weight: 800; cursor: pointer;
+                }
+                .toggle-pill.active { background: var(--primary); color: white; border-color: var(--primary); }
                 .log-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
                 .log-row { font-family: monospace; font-size: 0.7rem; padding: 8px; background: rgba(0,0,0,0.02); border-radius: 4px; border-left: 2px solid #ccc; }
                 .log-row.highlight { background: rgba(153, 173, 122, 0.05); border-left-color: var(--secondary); }
